@@ -6,13 +6,13 @@ import numpy as np
 from absl import logging
 from torch.distributions import Uniform, MultivariateNormal, kl_divergence
 
-from meta_bo.models.models import LearnedGPRegressionModel, NeuralNetwork, AffineTransformedDistribution, SEKernelLight
+from meta_bo.models.base.gp_components import LearnedGPRegressionModel, SEKernelLight
+from meta_bo.models.base.neural_network import NeuralNetwork
+from meta_bo.models.base.distributions import AffineTransformedDistribution
 from meta_bo.models.util import _handle_input_dimensionality, DummyLRScheduler
 from meta_bo.models.abstract import RegressionModelMetaLearned
 from meta_bo.domain import ContinuousDomain, DiscreteDomain
 from config import device
-
-
 
 class FPACOH_MAP_GP(RegressionModelMetaLearned):
 

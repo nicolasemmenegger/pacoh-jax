@@ -1,21 +1,34 @@
+import warnings
+
 import numpy as np
-import torch
+import numpyro.distributions
+
 from meta_bo.models.util import get_logger, _handle_input_dimensionality
 from config import device
 
+import jax
+from jax import numpy as jnp
+from abc import ABC, abstractmethod
 
-class RegressionModel:
+class RegressionModel(ABC):
+    def __init__(self, input_dim, normalize_data=True, random_state=None):
+        """Abstracts the boilerplate functionality of a Regression Model.
 
-    def __init__(self, normalize_data=True, random_state=None):
+        Notes:
+            Subclasses should implement a predict method returning either a density or a
+            (mean, stddev) tuple.
+        """
+        self.input_dim = input_dim
         self.normalize_data = normalize_data
-        self.input_dim = None
+        self._rds = random_state if random_state is not None else jax.random.PRNGKey(42)
 
-        self._rds = random_state if random_state is not None else np.random
-        torch.manual_seed(self._rds.randint(0, 10**7))
+        warnings.warn("random state definition will change depending on which parts are in haiku and which are not ")
+        # TODO ask Jonas what's the rationale behind this
+        # torch.manual_seed(self._rds.randint(0, 10**7))
 
-
+    @abstractmethod
     def predict(self, test_x, return_density=False, **kwargs):
-        raise NotImplementedError
+        pass
 
     def eval(self, test_x, test_y, **kwargs):
         """
@@ -28,39 +41,40 @@ class RegressionModel:
         Returns: (avg_log_likelihood, rmse)
 
         """
-        # convert to tensors
         test_x, test_y = _handle_input_dimensionality(test_x, test_y)
-        test_t_tensor = torch.from_numpy(test_y).contiguous().float().flatten().to(device)
 
-        with torch.no_grad():
-            pred_dist = self.predict(test_x, return_density=True, *kwargs)
-            avg_log_likelihood = pred_dist.log_prob(test_t_tensor) / test_t_tensor.shape[0]
-            rmse = torch.mean(torch.pow(pred_dist.mean - test_t_tensor, 2)).sqrt()
+        # test_t_tensor = torch.from_numpy(test_y).contiguous().float().flatten().to(device)
 
-            pred_dist_vect = self._vectorize_pred_dist(pred_dist)
-            calibr_error = self._calib_error(pred_dist_vect, test_t_tensor)
-            calibr_error_chi2 = _calib_error_chi2(pred_dist_vect, test_t_tensor)
+        pred_dist = self.predict(test_x, return_density=True, *kwargs)
+        avg_log_likelihood = pred_dist.log_prob(test_y) / test_y.shape[0]
+        rmse = np.mean(np.pow(pred_dist.mean - test_y, 2)).sqrt()
 
-            return avg_log_likelihood.cpu().item(), rmse.cpu().item(), calibr_error.cpu().item(), calibr_error_chi2
+        pred_dist_vect = self._vectorize_pred_dist(pred_dist)
+        calibr_error = self._calib_error(pred_dist_vect, test_y)
+        calibr_error_chi2 = _calib_error_chi2(pred_dist_vect, test_y)
+
+        print("maybe this won't work, need to replace item", avg_log_likelihood)
+        return avg_log_likelihood.item(), rmse.item(), calibr_error.item(), calibr_error_chi2
 
     def confidence_intervals(self, test_x, confidence=0.9, **kwargs):
         pred_dist = self.predict(test_x, return_density=True, **kwargs)
         pred_dist = self._vectorize_pred_dist(pred_dist)
-
         alpha = (1 - confidence) / 2
-        ucb = pred_dist.icdf(torch.ones(test_x.size) * (1 - alpha))
-        lcb = pred_dist.icdf(torch.ones(test_x.size) * alpha)
+        ucb = pred_dist.icdf(np.ones(test_x.size) * (1 - alpha))
+        lcb = pred_dist.icdf(np.ones(test_x.size) * alpha)
         return ucb, lcb
 
-    def _reset_posterior(self):
-        raise NotImplementedError
+    @abstractmethod
+    def _recompute_posterior(self):
+        pass
 
     def _reset_data(self):
-        self.X_data = torch.empty(size=(0, self.input_dim), dtype=torch.float64)
-        self.y_data = torch.empty(size=(0,), dtype=torch.float64)
+        self.X_data = jnp.zeros((0, self.input_dim), dtype=np.double)
+        self.y_data = jnp.zeros((0,), dtype=np.double)
         self._num_train_points = 0
 
     def _handle_input_dim(self, X, y):
+        # TODO merge with the _util function and just use that
         if X.ndim == 1:
             assert X.shape[-1] == self.input_dim
             X = X.reshape((-1, self.input_dim))
@@ -75,34 +89,42 @@ class RegressionModel:
         return X, y
 
     def add_data(self, X, y):
-        assert X.ndim == 1 or X.ndim == 2
+        assert X.ndim == 1 or X.ndim == 2 # this could be done in _handle_input_dimensionality
 
         # handle input dimensionality
         X, y = self._handle_input_dim(X, y)
 
         # normalize data
         X, y = self._normalize_data(X, y)
-        y = y.flatten()
+        y = y.flatten() # TODO why is this necessary
 
-        if self._num_train_points == 0 and y.shape[0] == 1:
-            # for some reason gpytorch can't deal with one data point
-            # thus store first point double and remove later
+        # if self._num_train_points == 0 and y.shape[0] == 1:
+        #     # for some reason gpytorch can't deal with one data point
+        #     # thus store first point double and remove later
+        #     self.X_data = np.concatenate([self.X_data, X])
+        #     self.y_data = np.concatenate([self.y_data, y])
+        # if self._num_train_points == 1 and self.X_data.shape[0] == 2:
+        #     # remove duplicate datapoint
+        #     self.X_data = self.X_data[:1, :]
+        #     self.y_data = self.y_data[:1]
+
+        if hasattr(self, "X_data"):
+            assert hasattr(self, "y_data"), "X_data is not None, but we have no labels..."
             self.X_data = np.concatenate([self.X_data, X])
             self.y_data = np.concatenate([self.y_data, y])
-        if self._num_train_points == 1 and self.X_data.shape[0] == 2:
-            # remove duplicate datapoint
-            self.X_data = self.X_data[:1, :]
-            self.y_data = self.y_data[:1]
+        else:
+            self.X_data = X
+            self.y_data = y
 
-        self.X_data = np.concatenate([self.X_data, X])
-        self.y_data = np.concatenate([self.y_data, y])
-
-        self._num_train_points += y.shape[0]
+        if hasattr(self, "_num_train_points"):
+            self._num_train_points += y.shape[0]
+        else:
+            self._num_train_points = y.shape[0]
 
         assert self.X_data.shape[0] == self.y_data.shape[0]
         assert self._num_train_points == 1 or self.X_data.shape[0] == self._num_train_points
 
-        self._reset_posterior()
+        self._recompute_posterior()
 
     def _set_normalization_stats(self, normalization_stats_dict=None):
         if normalization_stats_dict is None:
@@ -117,15 +139,6 @@ class RegressionModel:
     def _calib_error(self, pred_dist_vectorized, test_t_tensor):
         return _calib_error(pred_dist_vectorized, test_t_tensor)
 
-    def _compute_normalization_stats(self, X, Y):
-        # save mean and variance of data for normalization
-        if self.normalize_data:
-            self.x_mean, self.y_mean = np.mean(X, axis=0), np.mean(Y, axis=0)
-            self.x_std, self.y_std = np.std(X, axis=0) + 1e-8, np.std(Y, axis=0) + 1e-8
-        else:
-            self.x_mean, self.y_mean = np.zeros(X.shape[1]), np.zeros(Y.shape[1])
-            self.x_std, self.y_std = np.ones(X.shape[1]), np.ones(Y.shape[1])
-
     def _normalize_data(self, X, Y=None):
         assert hasattr(self, "x_mean") and hasattr(self, "x_std"), "requires computing normalization stats beforehand"
         assert hasattr(self, "y_mean") and hasattr(self, "y_std"), "requires computing normalization stats beforehand"
@@ -138,7 +151,19 @@ class RegressionModel:
             Y_normalized = (Y - self.y_mean) / self.y_std
             return X_normalized, Y_normalized
 
+    # def _compute_normalization_stats(self, X, Y):
+    #     # save mean and variance of data for normalization
+    #     if self.normalize_data:
+    #         self.x_mean, self.y_mean = jnp.mean(X, axis=0), jnp.mean(Y, axis=0)
+    #         self.x_std, self.y_std = jnp.std(X, axis=0) + 1e-8, jnp.std(Y, axis=0) + 1e-8
+    #     else:
+    #         self.x_mean, self.y_mean = jnp.zeros(X.shape[1]), jnp.zeros(Y.shape[1])
+    #         self.x_std, self.y_std = jnp.ones(X.shape[1]), jnp.ones(Y.shape[1])
+
+
+
     def _unnormalize_pred(self, pred_mean, pred_std):
+        warnings.warn("accessing code you thought was not used")
         assert hasattr(self, "x_mean") and hasattr(self, "x_std"), "requires computing normalization stats beforehand"
         assert hasattr(self, "y_mean") and hasattr(self, "y_std"), "requires computing normalization stats beforehand"
 
@@ -154,22 +179,22 @@ class RegressionModel:
 
         return pred_mean, pred_std
 
-    def _initial_data_handling(self, train_x, train_t):
-        train_x, train_t = _handle_input_dimensionality(train_x, train_t)
-        self.input_dim, self.output_dim = train_x.shape[-1], train_t.shape[-1]
-        self.n_train_samples = train_x.shape[0]
+    def _initial_data_handling(self, xs, ys):
+        raise Exception("I thought this code is not used anywhere")
+        """
+        All the preprocessing encapsulated. Handles the dimensionality, computes normalization stats
+        and normalizes the data
+        """
+        xs, ys = _handle_input_dimensionality(xs, ys)
 
         # b) normalize data to exhibit zero mean and variance
-        self._compute_normalization_stats(train_x, train_t)
-        train_x_normalized, train_t_normalized = self._normalize_data(train_x, train_t)
+        self._compute_normalization_stats(xs, ys)
+        xs_normalized, ys_normalized = self._normalize_data(train_x, train_y)
 
         # c) Convert the data into pytorch tensors
-        self.train_x = torch.from_numpy(train_x_normalized).contiguous().float().to(device)
-        self.train_t = torch.from_numpy(train_t_normalized).contiguous().float().to(device)
+        return xs_normalized, ys_normalized
 
-        return self.train_x, self.train_t
-
-    def _vectorize_pred_dist(self, pred_dist):
+    def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution) -> numpyro.distributions.Distribution:
         raise NotImplementedError
 
 class RegressionModelMetaLearned(RegressionModel):

@@ -1,10 +1,14 @@
+import warnings
+
 import torch
 import gpytorch
 import time
 import numpy as np
 from absl import logging
 
-from meta_bo.models.models import LearnedGPRegressionModel, NeuralNetwork, AffineTransformedDistribution
+from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean
+from meta_bo.models.base.neural_network import NeuralNetwork
+from meta_bo.models.base.distributions import AffineTransformedDistribution
 from meta_bo.models.util import _handle_input_dimensionality, DummyLRScheduler
 from meta_bo.models.abstract import RegressionModelMetaLearned
 from config import device
@@ -18,9 +22,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         super().__init__(normalize_data, random_seed)
 
+        warnings.warn("check the learningmodes for the PACOH MAP GP Module ")
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla']
-        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, gpytorch.means.Mean)
-        assert covar_module in ['NN', 'SE'] or isinstance(covar_module, gpytorch.kernels.Kernel)
+        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXConstantMean)
+        assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel)
 
         self.input_dim = input_dim
         self.lr, self.weight_decay, self.feature_dim = lr, weight_decay, feature_dim

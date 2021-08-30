@@ -8,3 +8,6 @@ pandas
 scipy
 matplotlib
 absl-py
+jax[cpu]
+dm-haiku
+numpyro
