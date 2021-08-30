@@ -86,7 +86,7 @@ class GPRegressionVanilla(RegressionModel):
         self._reset_data()
         self.gp.reset_to_prior()
 
-    def _reset_posterior(self):
+    def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
         self.gp.fit(self.X_data, self.y_data)
 

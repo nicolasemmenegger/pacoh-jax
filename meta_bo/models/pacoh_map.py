@@ -6,7 +6,7 @@ import time
 import numpy as np
 from absl import logging
 
-from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean
+from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean, JAXKernel, JAXMean
 from meta_bo.models.base.neural_network import NeuralNetwork
 from meta_bo.models.base.distributions import AffineTransformedDistribution
 from meta_bo.models.util import _handle_input_dimensionality, DummyLRScheduler
@@ -15,26 +15,47 @@ from config import device
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
 
-    def __init__(self, input_dim, learning_mode='both', weight_decay=0.0, feature_dim=2, num_iter_fit=10000,
-                 covar_module='NN', mean_module='NN', mean_nn_layers=(32, 32), kernel_nn_layers=(32, 32),
-                 task_batch_size=5, lr=1e-3, lr_decay=1.0, normalize_data=True,
-                 normalization_stats=None, random_seed=None):
+    def __init__(self,
+                 input_dim,
+                 learning_mode='both',
+                 weight_decay=0.0,
+                 feature_dim=2,
+                 num_iter_fit=10000,
+                 covar_module='NN',
+                 mean_module='NN',
+                 mean_nn_layers=(32, 32),
+                 kernel_nn_layers=(32, 32),
+                 task_batch_size=5,
+                 lr=1e-3,
+                 lr_decay=1.0,
+                 normalize_data=True,
+                 normalization_stats=None,
+                 random_seed=None):
 
         super().__init__(normalize_data, random_seed)
 
-        warnings.warn("check the learningmodes for the PACOH MAP GP Module ")
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla']
-        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXConstantMean)
+        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean)
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel)
 
         self.input_dim = input_dim
-        self.lr, self.weight_decay, self.feature_dim = lr, weight_decay, feature_dim
-        self.num_iter_fit, self.task_batch_size, self.normalize_data = num_iter_fit, task_batch_size, normalize_data
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.feature_dim = feature_dim
+        self.num_iter_fit = num_iter_fit
+        self.task_batch_size = task_batch_size
+        self.normalize_data = normalize_data
 
         """ Setup prior and likelihood """
+        # note there is only one prior, because there is only one particle
         self._setup_gp_prior(mean_module, covar_module, learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers)
-        self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
-            noise_constraint=gpytorch.likelihoods.noise_models.GreaterThan(1e-3)).to(device)
+        self.likelihood = JAXLearnedLikelihood()
+
+        # TODO implement likelihood with boundary constraint
+        # self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
+        #     noise_constraint=gpytorch.likelihoods.noise_models.GreaterThan(1e-3)).to(device)
+
+        # TODO implement a parameter dict, but I guess haiku will just take care of this :)
         self.shared_parameters.append({'params': self.likelihood.parameters(), 'lr': self.lr})
         self._setup_optimizer(lr, lr_decay)
 
@@ -222,6 +243,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         return task_dict
 
     def _step(self, task_dicts):
+        # this function will look completely different
         assert len(task_dicts) > 0
         loss = 0.0
         self.optimizer.zero_grad()
@@ -283,6 +305,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             self.shared_parameters.append({'params': self.mean_module.hyperparameters(), 'lr': self.lr})
 
     def _setup_optimizer(self, lr, lr_decay):
+        """ Initializes the optimizer as adam """
+        self.optimizer = optax.adamw(lr, weight_decay=self.weight_decay)
         self.optimizer = torch.optim.AdamW(self.shared_parameters, lr=lr, weight_decay=self.weight_decay)
         if lr_decay < 1.0:
             self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1000, gamma=lr_decay)
@@ -318,7 +342,7 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
 
     for weight_decay in [0.8, 0.5, 0.4, 0.3, 0.2, 0.1]:
-        gp_model = PACOH_MAP_GP(meta_train_data, num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
+        gp_model = PACOH_MAP_GP(1, meta_train_data, num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS,
                                 kernel_nn_layers=NN_LAYERS)
         itrs = 0

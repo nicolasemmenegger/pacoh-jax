@@ -11,3 +11,4 @@ absl-py
 jax[cpu]
 dm-haiku
 numpyro
+optax

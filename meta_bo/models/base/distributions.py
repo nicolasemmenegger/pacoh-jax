@@ -4,6 +4,9 @@ from numpyro.distributions.transforms import AffineTransform
 import torch
 import numpy as np
 from jax import numpy as jnp
+import haiku as hk
+
+from meta_bo.models.base.common import PositiveParameter
 
 
 class AffineTransformedDistribution(TransformedDistribution):
@@ -180,11 +183,10 @@ class CatDist(Distribution):
         return torch.cat([getattr(d, sample_fn)(sample_shape) for d in self.dists], dim=-1)
 
 
-class JAXGaussianLikelihood:
-    def __init__(self, variance: float = 1.0):
-        self.variance = variance
+class JAXGaussianLikelihood(hk.Module):
+    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0):
+        self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
 
     def __call__(self, posterior):
-
-        scale = jnp.sqrt(posterior.scale**2 + self.variance)
+        scale = jnp.sqrt(posterior.scale**2 + self.variance())
         return Normal(loc=posterior.loc, scale=scale)

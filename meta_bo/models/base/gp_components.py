@@ -1,5 +1,6 @@
 import functools
 import warnings
+from typing import Optional
 
 import numpyro.distributions
 from gpytorch.functions import RBFCovariance
@@ -8,7 +9,11 @@ import gpytorch
 import torch
 from abc import ABC, abstractmethod
 from jax import numpy as jnp, vmap
-from jax.scipy.linalg import cholesky, cho_solve, cho_factor
+from jax.scipy.linalg import cho_solve, cho_factor
+import haiku as hk
+
+from meta_bo.models.base.common import PositiveParameter
+
 
 class ConstantMeanLight(gpytorch.means.Mean):
     def __init__(self, constant=torch.ones(1), batch_shape=torch.Size()):
@@ -95,16 +100,10 @@ class GaussianLikelihoodLight(gpytorch.likelihoods._GaussianLikelihoodBase):
         return res.mul(-0.5).sum(-1)
 
 
-""" ----------------------------------------------------"""
-""" ---------------- JAX GP components -----------------"""
-""" ----------------------------------------------------"""
-
-
 class JAXExactGP:
     """
         A simple implementation of a gaussian process module with exact inference and Gaussian Likelihood
     """
-
     def __init__(self, mean_module, cov_module, likelihood_variance):
         self.mean_module = mean_module
         self.noise_variance = likelihood_variance
@@ -115,23 +114,22 @@ class JAXExactGP:
         self.cholesky = None
         self.data_cov_with_noise = None
 
-
         self.cov_vec_vec = cov_module
         self.cov_vec_set = vmap(cov_module.__call__, (None, 0))
         self.cov_set_set = vmap(self.cov_vec_set.__call__, (0, None))
         self.mean_set = vmap(self.mean_module.__call__)
 
-    def fit(self, xs, ys):
+    def fit(self, xs: jnp.ndarray, ys):
         self.xs = xs
         self.ys_centered = ys - self.mean_set(xs).flatten()
         data_cov = self.cov_set_set(xs, xs)
         self.data_cov_with_noise = data_cov + jnp.eye(*data_cov.shape) * self.noise_variance
-        # we need a cholesky decomposition of (K + sigma I).
+        # we need a cholesky decomposition of (K(xs, xs) + sigma I).
         data_cov_with_noise = data_cov + jnp.eye(*data_cov.shape) * self.noise_variance
         self.cholesky = cho_factor(data_cov_with_noise, lower=True)
 
     @functools.partial(vmap, in_axes=(None, 0))
-    def posterior(self, x):
+    def posterior(self, x: jnp.ndarray):
         if self.ys_centered is not None:
             new_cov_row = self.cov_vec_set(x, self.xs)
             mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve(self.cholesky, self.ys_centered))
@@ -151,26 +149,51 @@ class JAXExactGP:
         return numpyro.distributions.Normal(loc=mean, scale=stddev)
 
 
+class JAXMean(hk.Module):
+    def __init__(self):
+        pass
+
+    @abstractmethod
+    def __call__(self, x):
+        pass
+
+
+class JAXConstantMean(JAXMean):
+    """Mean module with a learnable mean. """
+    def __init__(self, initial_constant=0.0):
+        super().__init__()
+        self.init_constant = initial_constant
+
+    def __call__(self, x):
+        # works for both batch or unbatched
+        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64, init=self.init_constant)
+        return jnp.ones(x.shape, dtype=jnp.float64) * mean
+
+class JAXZeroMean(JAXMean):
+    """Always zero, not learnable. """
+    def __call__(self, x):
+        return jnp.zeros(x.shape)
+
 class JAXKernel(ABC):
     """ Abstract base class for kernels that supports composition with a learned feature map """
 
-    def __init__(self, input_dim, learned_feature_map=None):
+    def __init__(self, input_dim: int, learned_feature_map: Optional[hk.Module] = None):
         self.input_dim = input_dim
         self.feature_map = learned_feature_map
 
     @abstractmethod
-    def kernel_fn(self, x1, x2=None):
+    def kernel_fn(self, x1: jnp.ndarray, x2: jnp.ndarray = None):
         """ If called with just one input, x2 = x1 is assumed.
             Can be called in both batch or non-batched mode
             usually RBF
         """
         pass
 
-    def add_feature_map(self, feature_map):
+    def add_feature_map(self, feature_map: hk.Module):
         """Adds a feature map phi to the kernel, which is then subsequently computed as k(phi(x1), phi(x2)). """
         self.feature_map = feature_map
 
-    def __call__(self, x1, x2=None):
+    def __call__(self, x1: jnp.ndarray, x2=None):
         if self.feature_map is not None:
             projected_x1 = self.learned_kernel(x1)
             projected_x2 = self.feature_map(x2)
@@ -180,24 +203,20 @@ class JAXKernel(ABC):
 
         return self.kernel_fn(projected_x1, projected_x2)
 
+class JAXRBFKernel(JAXKernel):
+    def __init__(self,
+                 input_dim,
+                 length_scale,
+                 output_scale,
+                 length_scale_constraint_gt=0.0,
+                 output_scale_constraint_gt=0.0):
 
-class JAXConstantMean:  # (hk.Module):
-    def __init__(self, constant):
-        self.constant = constant
-
-    def __call__(self, x):
-        # works for both batch or unbatched
-        return jnp.ones(x.shape) * self.constant
-
-
-class JAXRBFKernel(JAXKernel):  # (hk.Module):
-    def __init__(self, input_dim, length_scale, output_scale):
         super().__init__(input_dim)
-        self.length_scale = length_scale
-        self.output_scale = output_scale
+        self.output_scale = PositiveParameter(initial_value=output_scale, boundary_value=output_scale_constraint_gt)
+        self.length_scale = PositiveParameter(initial_value=length_scale, boundary_value=length_scale_constraint_gt)
 
     def kernel_fn(self, x1, x2):
-        return self.output_scale * jnp.exp(-0.5*(jnp.linalg.norm(x1 - x2) ** 2) / (self.length_scale ** 2))
+        return self.output_scale() * jnp.exp(-0.5*(jnp.linalg.norm(x1 - x2) ** 2) / (self.length_scale() ** 2))
 
 class LearnedGPRegressionModel(JAXExactGP):
     """
