@@ -1,15 +1,18 @@
 import warnings
 
+import numpyro.distributions
+import optax
 import torch
 import gpytorch
 import time
 import numpy as np
 from absl import logging
 
-from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean, JAXKernel, JAXMean
-from meta_bo.models.base.neural_network import NeuralNetwork
-from meta_bo.models.base.distributions import AffineTransformedDistribution
-from meta_bo.models.util import _handle_input_dimensionality, DummyLRScheduler
+from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean, JAXMean, JAXZeroMean
+from meta_bo.models.base.kernels import JAXRBFKernel, JAXRBFKernelNN, JAXKernel
+from meta_bo.models.base.neural_network import NeuralNetwork, JAXNeuralNetwork
+from meta_bo.models.base.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
+from meta_bo.models.util import _handle_input_dimensionality
 from meta_bo.models.abstract import RegressionModelMetaLearned
 from config import device
 
@@ -34,9 +37,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         super().__init__(normalize_data, random_seed)
 
-        assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla']
-        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean)
-        assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel)
+        assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla'], 'Invalid learning mode'
+        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
+        assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
 
         self.input_dim = input_dim
         self.lr = lr
@@ -46,30 +49,22 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.task_batch_size = task_batch_size
         self.normalize_data = normalize_data
 
-        """ Setup prior and likelihood """
+        """ Setup prior, likelihood and optimizer """
         # note there is only one prior, because there is only one particle
         self._setup_gp_prior(mean_module, covar_module, learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers)
-        self.likelihood = JAXLearnedLikelihood()
-
-        # TODO implement likelihood with boundary constraint
-        # self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
-        #     noise_constraint=gpytorch.likelihoods.noise_models.GreaterThan(1e-3)).to(device)
-
-        # TODO implement a parameter dict, but I guess haiku will just take care of this :)
-        self.shared_parameters.append({'params': self.likelihood.parameters(), 'lr': self.lr})
+        self.likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
         self._setup_optimizer(lr, lr_decay)
 
+        warnings.warn("do something with shared parameters, or check if haiku does everything I need ")
         """ ------- normalization stats & data setup  ------- """
         self._normalization_stats = normalization_stats
         self.reset_to_prior()
-
         self.fitted = False
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
 
-        assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
-        self.likelihood.train()
 
+        assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
 
         t = time.time()
@@ -177,17 +172,17 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             return pred_mean.cpu().numpy(), pred_std.cpu().numpy()
 
     def reset_to_prior(self):
+        warnings.warn("reimplement reset_to_prior")
+        return
         self._reset_data()
         self.gp = lambda x: self._prior(x)
 
-    def _reset_posterior(self):
+    def _recompute_posterior(self):
         x_context = torch.from_numpy(self.X_data).float().to(device)
         y_context = torch.from_numpy(self.y_data).float().to(device)
         self.gp = LearnedGPRegressionModel(x_context, y_context, self.likelihood,
                                       learned_kernel=self.nn_kernel_map, learned_mean=self.nn_mean_fn,
                                       covar_module=self.covar_module, mean_module=self.mean_module)
-        self.gp.eval()
-        self.likelihood.eval()
 
     def state_dict(self):
         state_dict = {
@@ -205,19 +200,22 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.optimizer.load_state_dict(state_dict['optimizer'])
 
     def _prior(self, x):
-        if self.nn_kernel_map is not None:
-            projected_x = self.nn_kernel_map(x)
-        else:
-            projected_x = x
+        warnings.warn("here I  need an haiku transform and with a forward function. I also need to keep the params somewhere that haiku init gives me")
+        return gpytorch.distributions.MultivariateNormal(self.mean_module(x), self.covar_module(x))
 
-            # feed through mean module
-        if self.nn_mean_fn is not None:
-            mean_x = self.nn_mean_fn(x).squeeze()
-        else:
-            mean_x = self.mean_module(projected_x).squeeze()
-
-        covar_x = self.covar_module(projected_x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        # if self.nn_kernel_map is not None:
+        #     projected_x = self.nn_kernel_map(x)
+        # else:
+        #     projected_x = x
+        #
+        #     # feed through mean module
+        # if self.nn_mean_fn is not None:
+        #     mean_x = self.nn_mean_fn(x).squeeze()
+        # else:
+        #     mean_x = self.mean_module(projected_x).squeeze()
+        #
+        # covar_x = self.covar_module(projected_x)
+        # return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
     def _prepare_meta_train_tasks(self, meta_train_tuples):
         self._check_meta_data_shapes(meta_train_tuples)
@@ -236,9 +234,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         task_dict = {'train_x': x_tensor, 'train_y': y_tensor}
 
         # b) prepare model
-        task_dict['model'] = LearnedGPRegressionModel(task_dict['train_x'], task_dict['train_y'], self.likelihood,
-                                                      learned_kernel=self.nn_kernel_map, learned_mean=self.nn_mean_fn,
-                                                      covar_module=self.covar_module, mean_module=self.mean_module)
+        task_dict['model'] = LearnedGPRegressionModel(self.mean_module, self.covar_module, self.likelihood)
+        # task_dict['model'] = LearnedGPRegressionModel(task_dict['train_x'], task_dict['train_y'], self.likelihood,
+        #                                               # learned_kernel=self.nn_kernel_map, learned_mean=self.nn_mean_fn,
+        #                                               covar_module=self.covar_module, mean_module=self.mean_module)
         task_dict['mll_fn'] = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, task_dict['model'])
         return task_dict
 
@@ -259,62 +258,65 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         return loss.item()
 
     def _setup_gp_prior(self, mean_module, covar_module, learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers):
-
-        self.shared_parameters = []
-
-        # a) determine kernel map & module
+        # setup kernel module
         if covar_module == 'NN':
             assert learning_mode in ['learn_kernel', 'both'], 'neural network parameters must be learned'
-            self.nn_kernel_map = NeuralNetwork(input_dim=self.input_dim, output_dim=feature_dim,
-                                          layer_sizes=kernel_nn_layers).to(device)
-            self.shared_parameters.append(
-                {'params': self.nn_kernel_map.parameters(), 'lr': self.lr, 'weight_decay': self.weight_decay})
-            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=feature_dim)).to(device)
+            self.covar_module = JAXRBFKernelNN(self.input_dim, feature_dim, layer_sizes=kernel_nn_layers)
+        elif covar_module == 'SE':
+            self.covar_module = JAXRBFKernel(input_dim=self.input_dim)
+        elif isinstance(covar_module, JAXKernel):
+            self.covar_module = covar_module
         else:
-            self.nn_kernel_map = None
+            raise ValueError('Invalid covar_module option')
 
-        if covar_module == 'SE':
-            self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel(ard_num_dims=self.input_dim)).to(device)
-        elif isinstance(covar_module, gpytorch.kernels.Kernel):
-            self.covar_module = covar_module.to(device)
-
-        # b) determine mean map & module
-
+        # setup mean module
         if mean_module == 'NN':
             assert learning_mode in ['learn_mean', 'both'], 'neural network parameters must be learned'
-            self.nn_mean_fn = NeuralNetwork(input_dim=self.input_dim, output_dim=1, layer_sizes=mean_nn_layers).to(device)
-            self.shared_parameters.append(
-                {'params': self.nn_mean_fn.parameters(), 'lr': self.lr, 'weight_decay': self.weight_decay})
-            self.mean_module = None
-        else:
-            self.nn_mean_fn = None
-
-        if mean_module == 'constant':
-            self.mean_module = gpytorch.means.ConstantMean().to(device)
+            self.mean_module = JAXNeuralNetwork(input_dim=self.input_dim, output_dim=1, layer_sizes=mean_nn_layers)
+        elif mean_module == 'constant':
+            self.mean_module = JAXConstantMean()
         elif mean_module == 'zero':
-            self.mean_module = gpytorch.means.ZeroMean().to(device)
-        elif isinstance(mean_module, gpytorch.means.Mean):
-            self.mean_module = mean_module.to(device)
-
-        # c) add parameters of covar and mean module if desired
-
-        if learning_mode in ["learn_kernel", "both"]:
-            self.shared_parameters.append({'params': self.covar_module.hyperparameters(), 'lr': self.lr})
-
-        if learning_mode in ["learn_mean", "both"] and self.mean_module is not None:
-            self.shared_parameters.append({'params': self.mean_module.hyperparameters(), 'lr': self.lr})
-
-    def _setup_optimizer(self, lr, lr_decay):
-        """ Initializes the optimizer as adam """
-        self.optimizer = optax.adamw(lr, weight_decay=self.weight_decay)
-        self.optimizer = torch.optim.AdamW(self.shared_parameters, lr=lr, weight_decay=self.weight_decay)
-        if lr_decay < 1.0:
-            self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 1000, gamma=lr_decay)
+            self.mean_module = JAXZeroMean()
+        elif isinstance(mean_module, JAXMean):
+            self.mean_module = mean_module
         else:
-            self.lr_scheduler = DummyLRScheduler()
+            raise ValueError('Invalid mean_module option')
 
-    def _vectorize_pred_dist(self, pred_dist):
-        return torch.distributions.Normal(pred_dist.mean, pred_dist.stddev)
+            # c) add parameters of covar and mean module if desired
+        warnings.warn("Check if I have the right lr scheduler for the different parts")
+        # # c) add parameters of covar and mean module if desired
+        # if learning_mode in ["learn_kernel", "both"]:
+        #     self.shared_parameters.append({'params': self.covar_module.hyperparameters(), 'lr': self.lr})
+        #
+        # if learning_mode in ["learn_mean", "both"] and self.mean_module is not None:
+        #     self.shared_parameters.append({'params': self.mean_module.hyperparameters(), 'lr': self.lr})
+
+
+
+    def _setup_optimizer(self, lr: float, lr_decay: float):
+        """
+        Sets up the optimizer AdamW
+
+        Args:
+            lr: the initial learning rate
+            lr_decay: the decay to apply to the learning rate every 1000 steps (not epochs, right?) TODO check
+        """
+        if lr_decay < 1.0:
+            # staircase = True means it's the same as StepLR from torch.optim
+            self.lr_scheduler = optax.exponential_decay(lr, 1000, decay_rate=lr_decay, staircase=True)
+        else:
+            self.lr_scheduler = optax.constant_schedule(lr)
+
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay)
+        warnings.warn("we need to have different weight-decays for some of the parameters!! -> regularization of log-scale parameters like the likelihood variance is problematic otherwise")
+        warnings.warn("check that the shared-parameters that the torch.optimizer works on are the same. Also check that you even need self.lr_scheduler (i.e. does it need to be a class property")
+
+    def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution):
+        """
+        Models the predictive distribution passed according to an independent, heteroscedastic Gaussian,
+        i.e. forgets about covariance in case the distribution was multivariate.
+        """
+        return torch.distributions.Normal(pred_dist.mean, pred_dist.scale)
 
 
 if __name__ == "__main__":
@@ -342,24 +344,27 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
 
     for weight_decay in [0.8, 0.5, 0.4, 0.3, 0.2, 0.1]:
-        gp_model = PACOH_MAP_GP(1, meta_train_data, num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
+        pacoh_map = PACOH_MAP_GP(1, num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS,
                                 kernel_nn_layers=NN_LAYERS)
+
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
+
         for i in range(10):
-            gp_model.meta_fit(meta_valid_tuples=meta_test_data, log_period=1000, n_iter=2000)
+            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=2000)
+
             itrs += 2000
 
             x_plot = np.linspace(-5, 5, num=150)
             x_context, t_context, x_test, y_test = meta_test_data[0]
-            pred_mean, pred_std = gp_model.predict(x_context, t_context, x_plot)
-            ucb, lcb = gp_model.confidence_intervals(x_context, t_context, x_plot, confidence=0.9)
+            pred_mean, pred_std = pacoh_map.meta_predict(x_context, t_context, x_plot)
+            # ucb, lcb = gp_model.confidence_intervals(x_context, x_plot)
 
             plt.scatter(x_test, y_test)
             plt.scatter(x_context, t_context)
 
             plt.plot(x_plot, pred_mean)
-            plt.fill_between(x_plot, lcb, ucb, alpha=0.2)
+            # plt.fill_between(x_plot, lcb, ucb, alpha=0.2)
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()

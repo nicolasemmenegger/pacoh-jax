@@ -32,6 +32,9 @@ class JAXNeuralNetwork(hk.Module):
         self.nonlinearity = nonlinearity
         self.n_layers = len(layer_sizes)
 
+    def __call__(self, x):
+        pass
+
 
 class NeuralNetwork(torch.nn.Sequential):
     """Trainable neural network kernel function for GPs."""

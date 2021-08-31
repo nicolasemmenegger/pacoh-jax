@@ -1,0 +1,72 @@
+import functools
+import warnings
+from abc import ABC, abstractmethod
+from typing import Callable, Optional
+
+from meta_bo.models.base.common import PositiveParameter
+from meta_bo.models.base.neural_network import JAXNeuralNetwork
+from jax import numpy as jnp
+
+def rbf_cov(x1, x2, ls, os):
+    return os * jnp.exp(-0.5 * (jnp.linalg.norm(x1 - x2) ** 2) / (ls ** 2))
+
+class JAXKernel:
+    """ Base class for kernels that supports composition with a learned feature map
+        Note:
+            Concrete implementation should subclass kernel_fn
+    """
+    def __init__(self,
+                 input_dim,
+                 covar_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.float64],
+                 feature_dim: Optional[Callable] = None,
+                 feature_map: Optional[Callable] = None):
+
+        assert (feature_map is not None and feature_dim is not None) or (feature_map is None and feature_dim is None), \
+            "either both the map and feature dim have to be none, or neither should"
+
+        warnings.warn("I should probably switch feature dim and input dim")
+        # kernel module
+        self._covar_fn = covar_fn
+        self._input_dim = input_dim
+
+        self._feature_map = feature_map if feature_map is not None else (lambda x: x)
+        self._feature_dim = input_dim if feature_dim is None else feature_dim
+
+    def __call__(self, x1: jnp.ndarray, x2: Optional[jnp.ndarray] = None):
+        return self._covar_fn(self._feature_map(x1), self._feature_map(x2))
+
+
+class JAXRBFKernel(JAXKernel):
+    def __init__(self,
+                 input_dim,
+                 length_scale=1.0,
+                 output_scale=1.0,
+                 length_scale_constraint_gt=0.0,
+                 output_scale_constraint_gt=0.0,
+                 feature_dim: Optional[int] = None,
+                 feature_map: Optional[Callable] = None):
+
+        self.output_scale = PositiveParameter(initial_value=output_scale, boundary_value=output_scale_constraint_gt)
+        self.length_scale = PositiveParameter(initial_value=length_scale, boundary_value=length_scale_constraint_gt)
+        covar_fn = functools.partial(rbf_cov, ls=self.length_scale, os=self.output_scale)
+        super().__init__(input_dim, covar_fn, feature_dim, feature_map)
+
+
+class JAXRBFKernelNN(JAXRBFKernel):
+    def __init__(self,
+                 input_dim,
+                 feature_dim,
+                 layer_sizes=(64, 64),
+                 length_scale=1.0,
+                 output_scale=1.0,
+                 length_scale_constraint_gt=0.0,
+                 output_scale_constraint_gt=0.0):
+
+        self.nn = JAXNeuralNetwork(input_dim, feature_dim, length_scale, layer_sizes)
+        super().__init__(input_dim,
+                         length_scale,
+                         output_scale,
+                         length_scale_constraint_gt,
+                         output_scale_constraint_gt,
+                         feature_dim=feature_dim,
+                         feature_map=self.nn)

@@ -13,6 +13,7 @@ from jax.scipy.linalg import cho_solve, cho_factor
 import haiku as hk
 
 from meta_bo.models.base.common import PositiveParameter
+from meta_bo.models.base.neural_network import JAXNeuralNetwork
 
 
 class ConstantMeanLight(gpytorch.means.Mean):
@@ -166,67 +167,24 @@ class JAXConstantMean(JAXMean):
 
     def __call__(self, x):
         # works for both batch or unbatched
-        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64, init=self.init_constant)
+        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64, init=lambda _: self.init_constant)
         return jnp.ones(x.shape, dtype=jnp.float64) * mean
+
 
 class JAXZeroMean(JAXMean):
     """Always zero, not learnable. """
     def __call__(self, x):
         return jnp.zeros(x.shape)
 
-class JAXKernel(ABC):
-    """ Abstract base class for kernels that supports composition with a learned feature map """
 
-    def __init__(self, input_dim: int, learned_feature_map: Optional[hk.Module] = None):
-        self.input_dim = input_dim
-        self.feature_map = learned_feature_map
-
-    @abstractmethod
-    def kernel_fn(self, x1: jnp.ndarray, x2: jnp.ndarray = None):
-        """ If called with just one input, x2 = x1 is assumed.
-            Can be called in both batch or non-batched mode
-            usually RBF
-        """
-        pass
-
-    def add_feature_map(self, feature_map: hk.Module):
-        """Adds a feature map phi to the kernel, which is then subsequently computed as k(phi(x1), phi(x2)). """
-        self.feature_map = feature_map
-
-    def __call__(self, x1: jnp.ndarray, x2=None):
-        if self.feature_map is not None:
-            projected_x1 = self.learned_kernel(x1)
-            projected_x2 = self.feature_map(x2)
-        else:
-            projected_x1 = x1
-            projected_x2 = x2
-
-        return self.kernel_fn(projected_x1, projected_x2)
-
-class JAXRBFKernel(JAXKernel):
-    def __init__(self,
-                 input_dim,
-                 length_scale,
-                 output_scale,
-                 length_scale_constraint_gt=0.0,
-                 output_scale_constraint_gt=0.0):
-
-        super().__init__(input_dim)
-        self.output_scale = PositiveParameter(initial_value=output_scale, boundary_value=output_scale_constraint_gt)
-        self.length_scale = PositiveParameter(initial_value=length_scale, boundary_value=length_scale_constraint_gt)
-
-    def kernel_fn(self, x1, x2):
-        return self.output_scale() * jnp.exp(-0.5*(jnp.linalg.norm(x1 - x2) ** 2) / (self.length_scale() ** 2))
-
+# I am not sure I even need this module
 class LearnedGPRegressionModel(JAXExactGP):
     """
         An exact inference GP model that can have a learned mean module and a learnable kernel feature map
     """
-    def __init__(self, mean_module, covar_module, likelihood, learned_ftr_map=None):
+    def __init__(self, mean_module, covar_module, likelihood):
         mean_module = mean_module
         covar_module = covar_module
-        if learned_ftr_map is not None:
-            covar_module.add_feature_map(learned_ftr_map)
 
         super(LearnedGPRegressionModel, self).__init__(mean_module, covar_module, likelihood.variance)
         self.likelihood = likelihood
@@ -244,6 +202,7 @@ class LearnedGPRegressionModel(JAXExactGP):
         #return predictive_dist
 
     def pred_ll(self, x, y):
+        # This is actually not used either in the original code
         raise NotImplementedError
 
         # TODO should this fit the gp to these datapoints?

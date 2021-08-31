@@ -5,7 +5,8 @@ import jax.random
 import numpy as np
 import numpyro.distributions
 
-from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXRBFKernel, JAXConstantMean
+from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean
+from meta_bo.models.base.kernels import JAXRBFKernel
 from meta_bo.models.base.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
 from meta_bo.models.abstract import RegressionModel
 from util import _handle_input_dimensionality
