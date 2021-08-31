@@ -197,10 +197,11 @@ class RegressionModel(ABC):
     def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution) -> numpyro.distributions.Distribution:
         raise NotImplementedError
 
-class RegressionModelMetaLearned(RegressionModel):
 
+class RegressionModelMetaLearned(RegressionModel, ABC):
+    @abstractmethod
     def meta_predict(self, context_x, context_y, test_x, return_density=False):
-        raise NotImplementedError
+        pass
 
     def eval_datasets(self, test_tuples, **kwargs):
         """
@@ -236,6 +237,7 @@ class RegressionModelMetaLearned(RegressionModel):
             return avg_log_likelihood.cpu().item(), rmse.cpu().item(), calibr_error.cpu().item(), calibr_error_chi2
 
     def _compute_meta_normalization_stats(self, meta_train_tuples):
+        print("META TRAIN TUPLES", meta_train_tuples)
         X_stack, Y_stack = list(zip(*[_handle_input_dimensionality(x_train, y_train) for x_train, y_train in meta_train_tuples]))
         X, Y = np.concatenate(X_stack, axis=0), np.concatenate(Y_stack, axis=0)
 

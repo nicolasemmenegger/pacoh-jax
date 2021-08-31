@@ -34,7 +34,6 @@ class RBF_Kernel(torch.nn.Module):
       RBF kernel
 
       :math:`K(x, y) = exp(||x-v||^2 / (2h))
-
       """
 
     def __init__(self, bandwidth=None):

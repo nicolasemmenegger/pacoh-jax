@@ -7,6 +7,7 @@ import gpytorch
 import time
 import numpy as np
 from absl import logging
+from jax import numpy as jnp
 
 from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean, JAXMean, JAXZeroMean
 from meta_bo.models.base.kernels import JAXRBFKernel, JAXRBFKernelNN, JAXKernel
@@ -62,8 +63,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.fitted = False
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
-
-
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
 
@@ -73,7 +72,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         for itr in range(1, n_iter + 1):
             # actual meta-training step
-            task_dict_batch = self._rds.choice(task_dicts, size=self.task_batch_size)
+            warnings.warn("self._rds.choice not correct")
+            task_dict_batch = task_dicts[:self.task_batch_size] # self._rds.choice(task_dicts, size=self.task_batch_size)
+
             loss = self._step(task_dict_batch)
             cum_loss += loss
 
@@ -88,6 +89,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
                 # if validation data is provided  -> compute the valid log-likelihood
                 if meta_valid_tuples is not None:
+                    warnings.warn("implement validation option")
                     self.likelihood.eval()
                     valid_ll, valid_rmse, calibr_err, calibr_err_chi2 = self.eval_datasets(meta_valid_tuples)
                     self.likelihood.train()
@@ -173,9 +175,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def reset_to_prior(self):
         warnings.warn("reimplement reset_to_prior")
-        return
-        self._reset_data()
-        self.gp = lambda x: self._prior(x)
+        self.gp = LearnedGPRegressionModel(self.mean_module, self.covar_module, self.likelihood)
+        # self._reset_data()
+        # self.gp = lambda x: self._prior(x)
 
     def _recompute_posterior(self):
         x_context = torch.from_numpy(self.X_data).float().to(device)
@@ -230,32 +232,32 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def _dataset_to_task_dict(self, x, y):
         # a) prepare data
-        x_tensor, y_tensor = self._prepare_data_per_task(x, y)
-        task_dict = {'train_x': x_tensor, 'train_y': y_tensor}
+        xs, ys = self._prepare_data_per_task(x, y)
+        task_dict = {'train_x': xs, 'train_y': ys}
 
-        # b) prepare model
+        # b) prepare model and fit it to task
         task_dict['model'] = LearnedGPRegressionModel(self.mean_module, self.covar_module, self.likelihood)
-        # task_dict['model'] = LearnedGPRegressionModel(task_dict['train_x'], task_dict['train_y'], self.likelihood,
-        #                                               # learned_kernel=self.nn_kernel_map, learned_mean=self.nn_mean_fn,
-        #                                               covar_module=self.covar_module, mean_module=self.mean_module)
-        task_dict['mll_fn'] = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, task_dict['model'])
+        warnings.warn("this should probably be decoupled")
+        task_dict['model'].fit(xs, ys)
+        task_dict['mll_fn'] = lambda _, __:  task_dict['model'].pred_ll()
         return task_dict
 
-    def _step(self, task_dicts):
+    def _get_batch_loss(self, task_dicts):
         # this function will look completely different
         assert len(task_dicts) > 0
-        loss = 0.0
-        self.optimizer.zero_grad()
-
-        for task_dict in task_dicts:
+        # self.optimizer.zero_grad()
+        def single_task_loss(task_dict):
             output = task_dict['model'](task_dict['train_x'])
             mll = task_dict['mll_fn'](output, task_dict['train_y'])
-            loss -= mll
+            return -mll
 
-        loss.backward()
-        self.optimizer.step()
-        self.lr_scheduler.step()
-        return loss.item()
+        all_losses = vmap(single_task_loss)
+        return jnp.sum(all_losses(task_dicts))
+
+        # loss.backward()
+        # self.optimizer.step()
+        # self.lr_scheduler.step()
+        # return loss.item()
 
     def _setup_gp_prior(self, mean_module, covar_module, learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers):
         # setup kernel module

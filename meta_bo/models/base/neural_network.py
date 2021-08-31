@@ -17,8 +17,6 @@ from abc import ABC, abstractmethod
 """ ----------------------------------------------------"""
 """ ------------------ Neural Network ------------------"""
 """ ----------------------------------------------------"""
-
-
 class JAXNeuralNetwork(hk.Module):
     def __init__(self,
                  input_dim: int = 2,
