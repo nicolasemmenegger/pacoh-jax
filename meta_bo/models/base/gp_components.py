@@ -58,7 +58,6 @@ class SEKernelLight(gpytorch.kernels.Kernel):
                                                                                         postprocess=False,
                                                                                         **params))
 
-
 class HomoskedasticNoiseLight(gpytorch.likelihoods.noise_models._HomoskedasticNoiseBase):
 
     def __init__(self, noise_var, *params, **kwargs):
@@ -105,40 +104,60 @@ class JAXExactGP:
     """
         A simple implementation of a gaussian process module with exact inference and Gaussian Likelihood
     """
-    def __init__(self, mean_module, cov_module, likelihood_variance):
-        self.mean_module = mean_module
-        self.noise_variance = likelihood_variance
+    def __init__(self, mean_module, cov_module, likelihood):
+        """
+        Args:
+            mean_module: hk.Module
+            cov_module: hk.Module
+            likelihood: hk.Module
 
-        # Attributes storing the data
-        self.xs = None
-        self.ys_centered = None
-        self.cholesky = None
-        self.data_cov_with_noise = None
+        :param mean_module:
+        :param cov_module:
+        :param likelihood:
+        """
+        self.mean_module = mean_module
+        self.noise_variance = likelihood.variance
+        self.likelihood = likelihood
 
         self.cov_vec_vec = cov_module
         self.cov_vec_set = vmap(cov_module.__call__, (None, 0))
         self.cov_set_set = vmap(self.cov_vec_set.__call__, (0, None))
         self.mean_set = vmap(self.mean_module.__call__)
+        hk.set_state("xs", None)
+        hk.set_state("ys", None)
 
-    def fit(self, xs: jnp.ndarray, ys):
-        self.xs = xs
-        self.ys_centered = ys - self.mean_set(xs).flatten()
+    def _ys_centered(self, xs, ys):
+        return ys - self.mean_set(xs).flatten()
+
+    def _data_cov_with_noise(self, xs):
         data_cov = self.cov_set_set(xs, xs)
-        self.data_cov_with_noise = data_cov + jnp.eye(*data_cov.shape) * self.noise_variance
-        # we need a cholesky decomposition of (K(xs, xs) + sigma I).
-        data_cov_with_noise = data_cov + jnp.eye(*data_cov.shape) * self.noise_variance
-        self.cholesky = cho_factor(data_cov_with_noise, lower=True)
+        return data_cov + jnp.eye(*data_cov.shape) * self.noise_variance()
+
+    def fit(self, xs: jnp.ndarray, ys: jnp.ndarray):
+        hk.set_state("xs", xs)
+        hk.set_state("ys", ys)
+        data_cov_w_noise = self._data_cov_with_noise(xs)
+        hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True))
 
     @functools.partial(vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
-        if self.ys_centered is not None:
-            new_cov_row = self.cov_vec_set(x, self.xs)
-            mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve(self.cholesky, self.ys_centered))
-            var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve(self.cholesky, new_cov_row))
-            stddev = jnp.sqrt(var)
+        """prediction without noise"""
+        xs = hk.get_state("xs")
+        ys = hk.get_state("ys")
+        if xs is not None:
+            # we have data
+            new_cov_row = self.cov_vec_set(x, xs)
+            mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), self._ys_centered(xs, ys)))
+            var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), new_cov_row))
+            std = jnp.sqrt(var)
             return numpyro.distributions.Normal(loc=mean, scale=stddev)
-        else:  # no data
+        else:
             return self._prior(x)
+
+    def pred_dist(self, x, noiseless=False):
+        """prediction with noise"""
+        predictive_dist_noiseless = self.posterior(x)
+        return self.likelihood(predictive_dist_noiseless)
 
     @functools.partial(vmap, in_axes=(None, 0))
     def prior(self, x):
@@ -149,10 +168,33 @@ class JAXExactGP:
         stddev = jnp.sqrt(self.cov_vec_vec(x, x))
         return numpyro.distributions.Normal(loc=mean, scale=stddev)
 
+    def add_data_and_refit(self, xs, ys):
+        old_xs = hk.get_state("xs")
+        old_ys = hk.get_state("ys")
+        all_xs = jnp.concatenate([old_xs, xs])
+        all_ys = jnp.concatenate([old_ys, ys])
+        self.fit(all_xs, all_ys)
+
+    def marginal_ll(self):
+        # the following computes the log likelihood of the training data, i.e. does not use the arguments
+        # How do I differentiate here?
+        warnings.warn("I do not think that this is implemented correctly, as I don't differentiate w.r.t. to the parameter"
+                      "of the likelihood variance that is inside the cholesky decomposition. I think I need to have some kind of "
+                      "option to keep the cholesky or not, depending on if I am meta-training or target-training. In the former case, I need to "
+                      "differentiate through the colesky decomp, whereas in the latter I don't. ")
+        xs = hk.get_state("xs")
+        ys = hk.get_state("ys")
+        ys_centered = self._ys_centered(xs, ys)
+        solved = cho_solve(hk.get_state("cholesky"), ys_centered)
+        data_cov = self._data_cov_with_noise(xs)
+        ll = -0.5 * jnp.dot(ys_centered, solved)
+        ll += -0.5 * jnp.linalg.slogdet(data_cov)[1]
+        ll -= xs.shape[0] / 2 * jnp.log(2 * jnp.pi)
+        return ll
 
 class JAXMean(hk.Module):
     def __init__(self):
-        pass
+        super().__init__()
 
     @abstractmethod
     def __call__(self, x):
@@ -167,55 +209,18 @@ class JAXConstantMean(JAXMean):
 
     def __call__(self, x):
         # works for both batch or unbatched
-        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64, init=lambda _: self.init_constant)
+        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64,
+                                init=hk.initializers.Constant(self.init_constant))
         return jnp.ones(x.shape, dtype=jnp.float64) * mean
 
 
 class JAXZeroMean(JAXMean):
     """Always zero, not learnable. """
+    def __init__(self):
+        super().__init__()
+
     def __call__(self, x):
         return jnp.zeros(x.shape)
-
-
-# I am not sure I even need this module
-class LearnedGPRegressionModel(JAXExactGP):
-    """
-        An exact inference GP model that can have a learned mean module and a learnable kernel feature map
-    """
-    def __init__(self, mean_module, covar_module, likelihood):
-        mean_module = mean_module
-        covar_module = covar_module
-
-        super(LearnedGPRegressionModel, self).__init__(mean_module, covar_module, likelihood.variance)
-        self.likelihood = likelihood
-
-    def kl(self, x):
-        raise NotImplementedError
-        # TODO change to jax distribution
-        return torch.distributions.kl.kl_divergence(self.posterior(x), self.prior(x))
-
-    def pred_dist(self, x, noiseless=False):
-        predictive_dist_noiseless = self.posterior(x)
-        return self.likelihood(predictive_dist_noiseless)
-
-        #predictive_dist.scale = jnp.sqrt(scale**2 + self.noise_variance)
-        #return predictive_dist
-
-    def pred_ll(self, x, y):
-        # This is actually not used either in the original code
-        raise NotImplementedError
-
-        # TODO should this fit the gp to these datapoints?
-        # the following computes the log likelihood of the training data, i.e. does not use the arguments
-        ll = -0.5*jnp.dot(self.ys_centered.T, cho_solve(self.cholesky, self.ys_centered))
-        ll += -0.5*jnp.linalg.slogdet(self.data_cov_with_noise)[1]
-        ll -= self.xs.shape[0]/2*jnp.log(2*jnp.pi)
-        return ll
-
-
-        # original implementation The marginal loglikelihood of the data
-        #pred_dist = self.pred_dist(x)
-        #return pred_dist.log_prob(y)
 
 
 #

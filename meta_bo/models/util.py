@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 import os
 import logging
@@ -41,21 +43,57 @@ def find_root_by_bounding(fun, left, right, eps=1e-6, max_iter=1e4):
 
     return middle
 
-def _handle_input_dimensionality(x, y=None):
+def _handle_point_input_dimensionality(self, x, y):
+    # TODO merge with the _util function and just use that
+
     if x.ndim == 1:
-        x = np.expand_dims(x, -1)
+        assert x.shape[-1] == self.input_dim
+        x = X.reshape((-1, self.input_dim))
 
-    assert x.ndim == 2
-
-    if y is not None:
-        if y.ndim == 1:
-            y = np.expand_dims(y, -1)
-        assert x.shape[0] == y.shape[0]
-        assert y.ndim == 2
-
-        return x, y
+    if isinstance(y, float) or y.ndim == 0:
+        y = np.array(y)
+        y = y.reshape((1,))
+    elif y.ndim == 1:
+        pass
     else:
-        return x
+        raise AssertionError('y must not have more than 1 dim')
+    return X, y
+
+def _handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = True):
+    """
+    Takes a dataset S=(xs,ys) and returns it in a uniform fashion. x shall have shape (num_points, input_dim) and
+    y shall have size (num_points), that is, we only consider scalar regression targets.
+    Args:
+        xs: The inputs
+        ys: The labels (optional)
+        flatten: Whether to return ys as (num_points), or (num_points, 1)
+    Notes:
+        ys can be None, to easily handle test data.
+    """
+    if xs.ndim == 1:
+        xs = np.expand_dims(xs, -1)
+
+    assert xs.ndim == 2
+
+    if ys is not None:
+        if flatten_ys:
+            ys = ys.flatten()
+            assert xs.shape[0] == ys.size
+            return xs, ys
+        else:
+            if ys.ndim == 1:
+                ys = np.expand_dims(ys, -1)
+            assert xs.shape[0] == ys.shape[0], "Number of points and labels is not the same"
+            assert ys.ndim == 2
+
+
+        if flatten:
+            return xs, ys.flatten()
+        else:
+            return xs, ys
+    else:
+        return xs
+
 
 def get_logger(log_dir=None, log_file='output.log', expname=''):
 
@@ -91,17 +129,8 @@ def get_logger(log_dir=None, log_file='output.log', expname=''):
             logger.log_dir = None
     return logger
 
-class DummyLRScheduler:
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def step(self, *args, **kwargs):
-        pass
-
 
 """ ------ Lightweight mltiprocessing utilities ------ """
-
 from multiprocessing import Process
 import multiprocessing
 import numpy as np

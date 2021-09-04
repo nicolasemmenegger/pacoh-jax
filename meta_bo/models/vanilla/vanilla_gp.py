@@ -5,11 +5,11 @@ import jax.random
 import numpy as np
 import numpyro.distributions
 
-from meta_bo.models.base.gp_components import LearnedGPRegressionModel, JAXConstantMean
+from meta_bo.models.base.gp_components import JAXExactGP, JAXConstantMean
 from meta_bo.models.base.kernels import JAXRBFKernel
 from meta_bo.models.base.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
-from meta_bo.models.abstract import RegressionModel
-from util import _handle_input_dimensionality
+from meta_bo.models.base.abstract import RegressionModel
+from meta_bo.models.util import _handle_batch_input_dimensionality
 from typing import Dict
 
 
@@ -49,10 +49,9 @@ class GPRegressionVanilla(RegressionModel):
         self.mean_module = JAXConstantMean(0.0)
         self.covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale)
         self.likelihood = JAXGaussianLikelihood(likelihood_variance)
-        self.gp = LearnedGPRegressionModel(self.mean_module,
-                                           self.covar_module,
-                                           self.likelihood,
-                                           learned_ftr_map=None)
+        self.gp = JAXExactGP(self.mean_module,
+                             self.covar_module,
+                             self.likelihood)
 
     def predict(self, test_x, return_density=False, **kwargs):
         """
@@ -68,7 +67,7 @@ class GPRegressionVanilla(RegressionModel):
         Notes:
             This includes both the epistemic and aleatoric uncertainty
         """
-        test_x = _handle_input_dimensionality(test_x)
+        test_x = _handle_batch_input_dimensionality(test_x)
         test_x_normalized = self._normalize_data(test_x)
 
         warnings.warn("Check normalization")

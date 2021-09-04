@@ -3,14 +3,17 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
+import haiku as hk
 from meta_bo.models.base.common import PositiveParameter
 from meta_bo.models.base.neural_network import JAXNeuralNetwork
 from jax import numpy as jnp
 
-def rbf_cov(x1, x2, ls, os):
-    return os * jnp.exp(-0.5 * (jnp.linalg.norm(x1 - x2) ** 2) / (ls ** 2))
 
-class JAXKernel:
+def rbf_cov(x1, x2, ls_param, os_param):
+    return os_param() * jnp.exp(-0.5 * (jnp.linalg.norm(x1 - x2) ** 2) / (ls_param() ** 2))
+
+
+class JAXKernel(hk.Module):
     """ Base class for kernels that supports composition with a learned feature map
         Note:
             Concrete implementation should subclass kernel_fn
@@ -20,7 +23,7 @@ class JAXKernel:
                  covar_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.float64],
                  feature_dim: Optional[Callable] = None,
                  feature_map: Optional[Callable] = None):
-
+        super().__init__()  # haiku module initializer
         assert (feature_map is not None and feature_dim is not None) or (feature_map is None and feature_dim is None), \
             "either both the map and feature dim have to be none, or neither should"
 
@@ -45,11 +48,14 @@ class JAXRBFKernel(JAXKernel):
                  output_scale_constraint_gt=0.0,
                  feature_dim: Optional[int] = None,
                  feature_map: Optional[Callable] = None):
+        # Temporary hack => call with no setup covariance function
+        super().__init__(input_dim, None)
 
         self.output_scale = PositiveParameter(initial_value=output_scale, boundary_value=output_scale_constraint_gt)
         self.length_scale = PositiveParameter(initial_value=length_scale, boundary_value=length_scale_constraint_gt)
-        covar_fn = functools.partial(rbf_cov, ls=self.length_scale, os=self.output_scale)
-        super().__init__(input_dim, covar_fn, feature_dim, feature_map)
+        covar_fn = functools.partial(rbf_cov, ls_param=self.length_scale, os_param=self.output_scale)
+        self._covar_fn = covar_fn
+        self._feature_dim = feature_dim
 
 
 class JAXRBFKernelNN(JAXRBFKernel):

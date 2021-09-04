@@ -185,6 +185,7 @@ class CatDist(Distribution):
 
 class JAXGaussianLikelihood(hk.Module):
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0):
+        super().__init__()
         self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
 
     def __call__(self, posterior):
