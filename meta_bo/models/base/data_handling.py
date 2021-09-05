@@ -1,11 +1,14 @@
 import numpy as np
 from typing import Dict, NamedTuple
 
+from meta_bo.models.util import _handle_batch_input_dimensionality
+
+
 class Statistics(NamedTuple):
     x_mean: np.ndarray
     x_std: np.ndarray
-    y_mean: float
-    y_std: float
+    y_mean: np.ndarray
+    y_std: np.ndarray
 
 class DataNormalizer:
     """ A class that abstracts away common data storage and normalization tasks """
@@ -16,14 +19,15 @@ class DataNormalizer:
         if normalization_stats is not None:
             self.stats = normalization_stats
         else:
-            self.stats = Statistics(
+            self.stats = DataNormalizer.get_trivial_stats()
+
+    def get_trivial_stats(self):
+        return Statistics(
                 x_mean=np.ones((self.input_dim,)),
                 x_std=np.ones((self.input_dim,)),
-                y_mean=1.0,
-                y_std=1.0
-            )
+                y_mean=np.zeros((1,)),
+                y_std=np.ones((1,)))
 
-    @classmethod
     def from_meta_data_sets(cls, input_dim, meta_tasks):
         """Second constructor that directly infers the normalisation stats from the meta_data_set"""
         stats = cls.compute_nomalization_stats_from_meta_datasets(meta_tasks)
@@ -35,8 +39,26 @@ class DataNormalizer:
         pass
 
     @classmethod
-    def compute_normalization_stats_from_meta_datasets(cls, meta_tasks):
-        pass
+    def compute_normalization_stats_meta(cls, meta_train_tuples):
+        """
+        Expects y to be flattened
+        """
+        xs_stack, ys_stack = map(list,
+                                 zip(*[_handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
+                                       meta_train_tuples]))
+        all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
+
+        if self.normalize_data:
+            return Statistics(
+                x_mean=np.mean(all_xs, axis=0),
+
+                y_mean=np.mean(all_ys, axis=0)
+            )
+            self.x_mean, self.y_mean = np.mean(all_xs, axis=0), np.mean(all_ys, axis=0)
+            self.x_std, self.y_std = np.std(all_xs, axis=0) + 1e-8, np.std(all_ys, axis=0) + 1e-8
+        else:
+            self.x_mean, self.y_mean = np.zeros(all_xs.shape[1]), np.zeros(1)
+            self.x_std, self.y_std = np.ones(all_xs.shape[1]), np.ones(1)
 
     def normalize_data(self, xs, ys):
         """Computes normalization based on the stored normalization statistics. """

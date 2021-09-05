@@ -1,42 +1,28 @@
-import warnings
-from typing import Collection, Union, Callable
-
-import haiku
-import optax
-import torch
+import functools
 import time
-import numpy as np
-from absl import logging
-
-from meta_bo.models.base.gradient_updater import GradientUpdater
-from meta_bo.models.pacoh_map.transformable import construct_pacoh_map_forward_fns
-from meta_bo.models.base.gp_components import JAXExactGP, JAXMean
-from meta_bo.models.base.distributions import AffineTransformedDistribution
-from meta_bo.models.base.abstract import RegressionModelMetaLearned
-
 import warnings
-from typing import Callable, NamedTuple, Tuple
+from typing import Callable, NamedTuple, Tuple, Collection, Union
 
 import haiku as hk
+import jax.random
+import numpy as np
+import optax
+import torch
+from absl import logging
 from jax import numpy as jnp
 
+from meta_bo.models.base.abstract import RegressionModelMetaLearned
+from meta_bo.models.base.data_handling import Statistics
+from meta_bo.models.base.distributions import AffineTransformedDistribution
 from meta_bo.models.base.distributions import JAXGaussianLikelihood
+from meta_bo.models.base.gp_components import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
+from meta_bo.models.base.gradient_updater import GradientUpdater
 from meta_bo.models.base.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
 from meta_bo.models.base.neural_network import JAXNeuralNetwork
-
-# maybe this can be automated
-# def factory(constructor arguments):
-#     def closure():
-#         obj = MyModule(constructor arguments)
-#         foo1 = obj.foo1
-#         foo2 = obj.foo2
-#         return init, (foo1, foo2)
-# 
-# haiku.multi_transform(factory(constructor arguments))
 from meta_bo.models.util import _handle_batch_input_dimensionality
 
 
-class PACOHInterface(NamedTuple):
+class BaseLearnerInterface(NamedTuple):
     """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
     kernel, mean and likelihood, but needs to perform target inference in parallel. """
     """This is the interface PACOH base learners should provide.
@@ -45,11 +31,11 @@ class PACOHInterface(NamedTuple):
     base_learner_predict: Actual predict on a task
     base_learner_mll_estimator: The mll of the base estimator under the data one just passed it
     """
-    #base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
-    #base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
-    base_learner_fit_and_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray], None]
-    #hyper_prior_log_ll: Callable[[], jnp.float32]
+    base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
+    base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
+    base_learner_fit_and_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray], jnp.ndarray]
     base_learner_mll_estimator: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.float32]
+
 
 def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learning_mode,
                                     feature_dim, mean_nn_layers, kernel_nn_layers):
@@ -82,43 +68,45 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
             raise ValueError('Invalid mean_module option')
 
         likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
-        base_learner = LearnedGPRegressionModel(mean_module, covar_module, likelihood)
+        base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
-        def init_fn(task):
-            """This is somewhat uninstructive """
-            base_learner.fit(*task)
+        init_fn = base_learner.pred_dist
+        base_learner_fit = base_learner.fit
+        base_learner_predict = base_learner.pred_dist
 
-        def base_learner_fit_and_predict(context_task, test_x):
-            base_learner.fit(*context_task)
-            return base_learner.pred_dist(test_x)
+        def base_learner_fit_and_predict(xs, ys, xs_test):
+            base_learner.fit(xs, ys)
+            return base_learner.pred_dist(xs_test)
 
-        def base_learner_mll_estimator(task):
-            # is this the same state
-            base_learner.fit(*task)
+        def base_learner_mll_estimator(xs, ys):
+            base_learner.fit(xs, ys)
             return base_learner.marginal_ll()
 
-        return init_fn, PACOHInterface(base_learner_fit_and_predict=base_learner_fit_and_predict,
-                                       base_learner_mll_estimator=base_learner_mll_estimator)
+        # this is the interface I want to vmap probably
+        return init_fn, BaseLearnerInterface(base_learner_fit=base_learner_fit,
+                                             base_learner_predict=base_learner_predict,
+                                             base_learner_mll_estimator=base_learner_mll_estimator,
+                                             base_learner_fit_and_predict=base_learner_fit_and_predict)
 
     return factory
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
     def __init__(self,
-                 input_dim,
-                 learning_mode='both',
-                 weight_decay=0.0,
-                 feature_dim=2,
-                 num_iter_fit=10000,
+                 input_dim: int,
+                 learning_mode: str = 'both',
+                 weight_decay: float = 0.0,
+                 feature_dim: int = 2,
+                 num_iter_fit: int =10000,
                  covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
                  mean_module: Union[str, Callable[[], JAXMean]] ='NN',
                  mean_nn_layers: Collection[int] = (32, 32),
-                 kernel_nn_layers=(32, 32),
-                 task_batch_size=5,
-                 lr=1e-3,
-                 lr_decay=1.0,
-                 normalize_data=True,
-                 normalization_stats=None,
-                 random_seed=None):
+                 kernel_nn_layers: Collection[int] = (32, 32),
+                 task_batch_size: int = 5,
+                 lr: float = 1e-3,
+                 lr_decay: float = 1.0,
+                 normalize_data: bool = True,
+                 normalization_stats: Statistics = None,
+                 random_seed: jax.random.PRNGKey = None):
         """
         :param input_dim:
         :param learning_mode:
@@ -136,7 +124,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         :param normalization_stats:
         :param random_seed:
         """
-
         super().__init__(normalize_data, random_seed)
 
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla'], 'Invalid learning mode'
@@ -149,7 +136,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.feature_dim = feature_dim
         self.num_iter_fit = num_iter_fit
         self.task_batch_size = task_batch_size
-        self.normalize_data = normalize_data
         self.mean_nn_layers = mean_nn_layers
         self.kernel_nn_layers = kernel_nn_layers
 
@@ -167,10 +153,11 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.fitted = False
 
         """-------- Setup haiku differentiable functions and parameters -------"""
-        pacoh_map_closure_fns = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
+        pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
                                                          feature_dim, mean_nn_layers, kernel_nn_layers)
-        self._init_fn, self._apply_fns = hk.multi_transform(pacoh_map_closure_fns)
-        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay)
+        self._init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
+        mask_fn = functools.partial(jax.tree_map, lambda _: True)
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
         self.updater = GradientUpdater(self._init_fn, self._apply_fns.base_learner_mll_estimator, self.optimizer)
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
@@ -181,7 +168,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         if not self.fitted:
             # we have to initialize our updater, passing it some template data
             warnings.warn("I think I'd prefer to have that same as in vae.py in the official haiku codebase")
-            self._updater_state = self.updater.init(self._rds, task_dicts[0])
+            self._updater_state = self.updater.init(self._rds, *task_dicts[0])
             self.fitted = True
 
         t = time.time()
@@ -195,7 +182,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             warnings.warn("implement batching via vmap, maybe inside the updater")
             # returns the new parameters based on one task
             # what is self._updater_state at this point?
-            self._updater_state, loss = self.updater.update(self._updater_state, task_dict)
+            self._updater_state, loss = self.updater.update(self._updater_state, *task_dict)
             cum_loss += loss['negative_mle']
 
             # print training stats stats
@@ -246,16 +233,15 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             (pred_mean, pred_std) predicted mean and standard deviation corresponding to p(t|test_x, test_context_x, context_y)
         """
         warnings.warn("I would suggest that meta_predict be deprecated in favor of separate fit and predict methods, no?", PendingDeprecationWarning)
-        context_x, context_y = _handle_input_dimensionality(context_x, context_y)
-        test_x = _handle_input_dimensionality(test_x)
+        context_x, context_y = _handle_batch_input_dimensionality(context_x, context_y)
+        test_x = _handle_batch_input_dimensionality(test_x)
         assert test_x.shape[1] == context_x.shape[1]
 
         # normalize data
         context_x, context_y = self._prepare_data_per_task(context_x, context_y)
-        test_x = self._normalize_data(X=test_x, Y=None)
+        test_x = self._normalize_data(test_x, None)
 
-        pred_dist = self._apply_fns.base_learner_fit_and_predict(self._updater_state['params'], self._rds, (context_x, context_y), test_x)
-
+        pred_dist, self._updater_state['hk_state'] = self._apply_fns.base_learner_fit_and_predict(self._updater_state['params'], self._updater_state['hk_state'], self._rds, context_x, context_y, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
 

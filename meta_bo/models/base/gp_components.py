@@ -123,8 +123,9 @@ class JAXExactGP:
         self.cov_vec_set = vmap(cov_module.__call__, (None, 0))
         self.cov_set_set = vmap(self.cov_vec_set.__call__, (0, None))
         self.mean_set = vmap(self.mean_module.__call__)
-        hk.set_state("xs", None)
-        hk.set_state("ys", None)
+        hk.set_state("xs", jnp.zeros((0, 1), dtype=jnp.float32))
+        hk.set_state("ys", jnp.zeros((0,), dtype=jnp.float32))
+
 
     def _ys_centered(self, xs, ys):
         return ys - self.mean_set(xs).flatten()
@@ -144,13 +145,13 @@ class JAXExactGP:
         """prediction without noise"""
         xs = hk.get_state("xs")
         ys = hk.get_state("ys")
-        if xs is not None:
+        if xs.size > 0:
             # we have data
             new_cov_row = self.cov_vec_set(x, xs)
             mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), self._ys_centered(xs, ys)))
             var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), new_cov_row))
             std = jnp.sqrt(var)
-            return numpyro.distributions.Normal(loc=mean, scale=stddev)
+            return numpyro.distributions.Normal(loc=mean, scale=std)
         else:
             return self._prior(x)
 

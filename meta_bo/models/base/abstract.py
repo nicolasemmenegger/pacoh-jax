@@ -161,12 +161,12 @@ class RegressionModel(ABC):
         assert hasattr(self, "x_mean") and hasattr(self, "x_std"), "requires computing normalization stats beforehand"
         assert hasattr(self, "y_mean") and hasattr(self, "y_std"), "requires computing normalization stats beforehand"
 
-        X_normalized = (X - self.x_mean[None, :]) / self.x_std[None, :]
+        X_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :]
 
-        if Y is None:
+        if ys is None:
             return X_normalized
         else:
-            Y_normalized = (Y - self.y_mean) / self.y_std
+            Y_normalized = (ys - self.y_mean) / self.y_std
             return X_normalized, Y_normalized
 
     def _compute_normalization_stats(self, xs, ys):
@@ -234,7 +234,7 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
 
     def meta_eval(self,  context_x, context_y, test_x, test_y):
         raise NotImplementedError
-        test_x, test_y = _handle_input_dimensionality(test_x, test_y)
+        test_x, test_y = _handle_batch_input_dimensionality(test_x, test_y)
         test_y_tensor = torch.from_numpy(test_y).contiguous().float().flatten().to(device)
 
         with torch.no_grad():
@@ -249,19 +249,24 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             return avg_log_likelihood.cpu().item(), rmse.cpu().item(), calibr_error.cpu().item(), calibr_error_chi2
 
     def _compute_meta_normalization_stats(self, meta_train_tuples):
-        X_stack, Y_stack = list(zip(*[_handle_input_dimensionality(x_train, y_train) for x_train, y_train in meta_train_tuples]))
-        X, Y = np.concatenate(X_stack, axis=0), np.concatenate(Y_stack, axis=0)
+        """
+        Expects y to be flattened
+        """
+        print(meta_train_tuples)
+        xs_stack, ys_stack = map(list, zip(*[_handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
+                                             meta_train_tuples]))
+        all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
 
         if self.normalize_data:
-            self.x_mean, self.y_mean = np.mean(X, axis=0), np.mean(Y, axis=0)
-            self.x_std, self.y_std = np.std(X, axis=0) + 1e-8, np.std(Y, axis=0) + 1e-8
+            self.x_mean, self.y_mean = np.mean(all_xs, axis=0), np.mean(all_ys, axis=0)
+            self.x_std, self.y_std = np.std(all_xs, axis=0) + 1e-8, np.std(all_ys, axis=0) + 1e-8
         else:
-            self.x_mean, self.y_mean = np.zeros(X.shape[1]), np.zeros(Y.shape[1])
-            self.x_std, self.y_std = np.ones(X.shape[1]), np.ones(Y.shape[1])
+            self.x_mean, self.y_mean = np.zeros(all_xs.shape[1]), np.zeros(1)
+            self.x_std, self.y_std = np.ones(all_xs.shape[1]), np.ones(1)
 
     def _check_meta_data_shapes(self, meta_train_data):
         for i in range(len(meta_train_data)):
-            meta_train_data[i] = _handle_input_dimensionality(*meta_train_data[i])
+            meta_train_data[i] = _handle_batch_input_dimensionality(*meta_train_data[i])
         self.input_dim = meta_train_data[0][0].shape[-1]
         self.output_dim = meta_train_data[0][1].shape[-1]
 
@@ -274,7 +279,7 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         # b) normalize data
         x_data, y_data = self._normalize_data(x_data, y_data)
 
-        if flatten_y:
+        if flatten_y and y_data.ndim == 2:
             assert y_data.shape[1] == 1
             y_data = y_data.flatten()
 
