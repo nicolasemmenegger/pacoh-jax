@@ -3,102 +3,10 @@ import warnings
 from typing import Optional
 
 import numpyro.distributions
-from gpytorch.functions import RBFCovariance
-from gpytorch.utils.broadcasting import _mul_broadcast_shape
-import gpytorch
-import torch
 from abc import ABC, abstractmethod
 from jax import numpy as jnp, vmap
 from jax.scipy.linalg import cho_solve, cho_factor
 import haiku as hk
-
-from meta_bo.models.base.common import PositiveParameter
-from meta_bo.models.base.neural_network import JAXNeuralNetwork
-
-
-class ConstantMeanLight(gpytorch.means.Mean):
-    def __init__(self, constant=torch.ones(1), batch_shape=torch.Size()):
-        super(ConstantMeanLight, self).__init__()
-        self.batch_shape = batch_shape
-        self.constant = constant
-
-    def forward(self, input):
-        if input.shape[:-2] == self.batch_shape:
-            return self.constant.expand(input.shape[:-1])
-        else:
-            return self.constant.expand(_mul_broadcast_shape(input.shape[:-1], self.constant.shape))
-
-
-class SEKernelLight(gpytorch.kernels.Kernel):
-
-    def __init__(self, lengthscale=torch.tensor([1.0]), output_scale=torch.tensor(1.0)):
-        super(SEKernelLight, self).__init__(batch_shape=(lengthscale.shape[0],))
-        self.length_scale = lengthscale
-        self.ard_num_dims = lengthscale.shape[-1]
-        self.output_scale = output_scale
-        self.postprocess_rbf = lambda dist_mat: self.output_scale * dist_mat.div_(-2).exp_()
-
-    def forward(self, x1, x2, diag=False, **params):
-        if (
-                x1.requires_grad
-                or x2.requires_grad
-                or (self.ard_num_dims is not None and self.ard_num_dims > 1)
-                or diag
-        ):
-            x1_ = x1.div(self.length_scale)
-            x2_ = x2.div(self.length_scale)
-            return self.covar_dist(x1_, x2_, square_dist=True, diag=diag,
-                                   dist_postprocess_func=self.postprocess_rbf,
-                                   postprocess=True, **params)
-        return self.output_scale * RBFCovariance().apply(x1, x2, self.length_scale,
-                                                         lambda x1, x2: self.covar_dist(x1, x2,
-                                                                                        square_dist=True,
-                                                                                        diag=False,
-                                                                                        dist_postprocess_func=self.postprocess_rbf,
-                                                                                        postprocess=False,
-                                                                                        **params))
-
-class HomoskedasticNoiseLight(gpytorch.likelihoods.noise_models._HomoskedasticNoiseBase):
-
-    def __init__(self, noise_var, *params, **kwargs):
-        self.noise_var = noise_var
-        self._modules = {}
-        self._parameters = {}
-
-    @property
-    def noise(self):
-        return self.noise_var
-
-    @noise.setter
-    def noise(self, value):
-        self.noise_var = value
-
-
-class GaussianLikelihoodLight(gpytorch.likelihoods._GaussianLikelihoodBase):
-
-    def __init__(self, noise_var, batch_shape=torch.Size()):
-        self.batch_shape = batch_shape
-        self._modules = {}
-        self._parameters = {}
-
-        noise_covar = HomoskedasticNoiseLight(noise_var)
-        super().__init__(noise_covar=noise_covar)
-
-    @property
-    def noise(self):
-        return self.noise_covar.noise
-
-    @noise.setter
-    def noise(self, value):
-        self.noise_covar.noise = value
-
-    def expected_log_prob(self, target, input, *params, **kwargs):
-        mean, variance = input.mean, input.variance
-        noise = self.noise_covar.noise
-
-        res = ((target - mean) ** 2 + variance) / noise + noise.log() + math.log(2 * math.pi)
-        return res.mul(-0.5).sum(-1)
-
 
 class JAXExactGP:
     """

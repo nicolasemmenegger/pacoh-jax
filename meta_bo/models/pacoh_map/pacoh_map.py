@@ -21,7 +21,6 @@ from meta_bo.models.base.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
 from meta_bo.models.base.neural_network import JAXNeuralNetwork
 from meta_bo.models.util import _handle_batch_input_dimensionality
 
-
 class BaseLearnerInterface(NamedTuple):
     """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
     kernel, mean and likelihood, but needs to perform target inference in parallel. """
@@ -96,9 +95,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                  learning_mode: str = 'both',
                  weight_decay: float = 0.0,
                  feature_dim: int = 2,
-                 num_iter_fit: int =10000,
+                 num_iter_fit: int = 10000,
                  covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
-                 mean_module: Union[str, Callable[[], JAXMean]] ='NN',
+                 mean_module: Union[str, Callable[[], JAXMean]] = 'NN',
                  mean_nn_layers: Collection[int] = (32, 32),
                  kernel_nn_layers: Collection[int] = (32, 32),
                  task_batch_size: int = 5,
@@ -154,11 +153,14 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         """-------- Setup haiku differentiable functions and parameters -------"""
         pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
-                                                         feature_dim, mean_nn_layers, kernel_nn_layers)
+                                                            feature_dim, mean_nn_layers, kernel_nn_layers)
         self._init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
-        mask_fn = functools.partial(jax.tree_map, lambda _: True)
+
+        mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
         self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
-        self.updater = GradientUpdater(self._init_fn, self._apply_fns.base_learner_mll_estimator, self.optimizer)
+        self.state: hk.State
+        self.params: hk.Params
+        self.opt_state: optax.OptState
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
         """ Runs the meta train loop for some number of iterations """
@@ -166,9 +168,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
 
         if not self.fitted:
-            # we have to initialize our updater, passing it some template data
-            warnings.warn("I think I'd prefer to have that same as in vae.py in the official haiku codebase")
-            self._updater_state = self.updater.init(self._rds, *task_dicts[0])
+            # Haiku init
+            self._rds, init_rng = jax.random.split(self._rds)
+            self.params, self.state = self._init_fn(init_rng, meta_train_tuples[0][0])
+            self.opt_state = self.optimizer.init(self.params)
             self.fitted = True
 
         t = time.time()
@@ -177,13 +180,31 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         for itr in range(1, n_iter + 1):
             # actual meta-training step
-            task_dict = task_dicts[0] # can I use the jax random key here? # self._rds.choice(task_dicts, size=self.task_batch_size)
+            self._rds, choice_key = jax.random.split(self._rds)
+            batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
 
-            warnings.warn("implement batching via vmap, maybe inside the updater")
-            # returns the new parameters based on one task
-            # what is self._updater_state at this point?
-            self._updater_state, loss = self.updater.update(self._updater_state, *task_dict)
-            cum_loss += loss['negative_mle']
+            warnings.warn("replace by vmap")
+
+            print(itr)
+
+            # Train loop
+            loss = 0.0
+            for i in batch_indices:
+                task_dict = task_dicts[i]
+                # a) get new random keys
+                self._rds, apply_rng = jax.random.split(self._rds)
+
+                # b) get value and gradient of mll
+                mll_value_and_grad = jax.value_and_grad(self._apply_fns.base_learner_mll_estimator, has_aux=True)
+                output, gradients = mll_value_and_grad(self.params, self.state, apply_rng, *task_dict)  # actually does not need anything I think
+                mll, self.state = output
+                loss -= mll
+
+                # c) compute and apply optimizer updates
+                updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
+                self.params = optax.apply_updates(self.params, updates)
+
+            cum_loss += loss
 
             # print training stats stats
             if itr == 1 or itr % log_period == 0:
@@ -304,14 +325,13 @@ if __name__ == "__main__":
                                 covar_module='SE', mean_module='constant', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
-
-
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
             pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=2000)
 
+            itrs += 2000
             itrs += 2000
 
             x_plot = np.linspace(-5, 5, num=150)
