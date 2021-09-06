@@ -286,20 +286,6 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         # c) convert to tensors
         return x_data, y_data
 
-    def _prepare_meta_train_tasks(self, meta_train_tuples, flatten_y=True):
-        self._check_meta_data_shapes(meta_train_tuples)
-        if self._normalization_stats is None:
-            self._compute_meta_normalization_stats(meta_train_tuples)
-        else:
-            self._set_normalization_stats(self._normalization_stats)
-
-
-        if flatten_y:
-            task_dicts = [(x,y.flatten())for x, y in meta_train_tuples]
-        else:
-            task_dicts = [{'x_train': x, 'y_train': y} for x, y in meta_train_tuples]
-        return task_dicts
-
     # def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution):
     #     """
     #     Models the predictive distribution passed according to an independent, heteroscedastic Gaussian,

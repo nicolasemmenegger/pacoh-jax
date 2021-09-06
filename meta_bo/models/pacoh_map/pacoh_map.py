@@ -31,7 +31,7 @@ class BaseLearnerInterface(NamedTuple):
     base_learner_mll_estimator: The mll of the base estimator under the data one just passed it
     """
     base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
-    base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
+    base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.ndarray]
     base_learner_fit_and_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray], jnp.ndarray]
     base_learner_mll_estimator: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.float32]
 
@@ -55,7 +55,7 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
         # setup mean module
         if mean_option == 'NN':
             assert learning_mode in ['learn_mean', 'both'], 'neural network parameters must be learned'
-            mean_module = JAXNeuralNetwork(input_dim=input_dim, output_dim=1, layer_sizes=mean_nn_layers)
+            mean_module = hk.nets.MLP(output_sizes=mean_nn_layers + (1,), activation=jax.nn.tanh)
         elif mean_option == 'constant':
             mean_module = JAXConstantMean()
         elif mean_option == 'zero':
@@ -78,8 +78,7 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
             return base_learner.pred_dist(xs_test)
 
         def base_learner_mll_estimator(xs, ys):
-            base_learner.fit(xs, ys)
-            return base_learner.marginal_ll()
+            return base_learner.marginal_ll(xs, ys)
 
         # this is the interface I want to vmap probably
         return init_fn, BaseLearnerInterface(base_learner_fit=base_learner_fit,
@@ -172,7 +171,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             self._rds, init_rng = jax.random.split(self._rds)
             self.params, self.state = self._init_fn(init_rng, meta_train_tuples[0][0])
             self.opt_state = self.optimizer.init(self.params)
-            self.fitted = True
+            # self.fitted = True
 
         t = time.time()
         cum_loss = 0.0
@@ -262,7 +261,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         context_x, context_y = self._prepare_data_per_task(context_x, context_y)
         test_x = self._normalize_data(test_x, None)
 
-        pred_dist, self._updater_state['hk_state'] = self._apply_fns.base_learner_fit_and_predict(self._updater_state['params'], self._updater_state['hk_state'], self._rds, context_x, context_y, test_x)
+        pred_dist, state = self._apply_fns.base_learner_fit_and_predict(self.params, self.state, self._rds, context_x, context_y, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
 
@@ -275,9 +274,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
-        self._apply_fns.base_learner_fit(self._updater_state['params'],
-                                         self._rds,
-                                         (self.xs_data, self.ys_data))
+        self._rds, fitkey = self._rds.split()
+        self._apply_fns.base_learner_fit(self.params,
+                                         fitkey,
+                                         self.xs_data, self.ys_data)
 
 
     def predict(self, test_x, return_density=False):
@@ -320,7 +320,7 @@ if __name__ == "__main__":
 
     torch.set_num_threads(2)
 
-    for weight_decay in [0.8, 0.5, 0.4, 0.3, 0.2, 0.1]:
+    for weight_decay in [0.5]:
         pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='SE', mean_module='constant', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
@@ -329,7 +329,7 @@ if __name__ == "__main__":
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=2000)
+            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=20)
 
             itrs += 2000
             itrs += 2000

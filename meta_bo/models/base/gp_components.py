@@ -1,7 +1,4 @@
 import functools
-import warnings
-from typing import Optional
-
 import numpyro.distributions
 from abc import ABC, abstractmethod
 from jax import numpy as jnp, vmap
@@ -42,7 +39,8 @@ class JAXExactGP:
         data_cov = self.cov_set_set(xs, xs)
         return data_cov + jnp.eye(*data_cov.shape) * self.noise_variance()
 
-    def fit(self, xs: jnp.ndarray, ys: jnp.ndarray):
+    def fit(self, xs: jnp.ndarray, ys: jnp.ndarray) -> None:
+        """ Fit adds the data in any case, stores cholesky if we are at eval stage for later reuse"""
         hk.set_state("xs", xs)
         hk.set_state("ys", ys)
         data_cov_w_noise = self._data_cov_with_noise(xs)
@@ -50,7 +48,6 @@ class JAXExactGP:
 
     @functools.partial(vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
-        """prediction without noise"""
         xs = hk.get_state("xs")
         ys = hk.get_state("ys")
         if xs.size > 0:
@@ -84,20 +81,16 @@ class JAXExactGP:
         all_ys = jnp.concatenate([old_ys, ys])
         self.fit(all_xs, all_ys)
 
-    def marginal_ll(self):
-        # the following computes the log likelihood of the training data, i.e. does not use the arguments
-        # How do I differentiate here?
-        warnings.warn("I do not think that this is implemented correctly, as I don't differentiate w.r.t. to the parameter"
-                      "of the likelihood variance that is inside the cholesky decomposition. I think I need to have some kind of "
-                      "option to keep the cholesky or not, depending on if I am meta-training or target-training. In the former case, I need to "
-                      "differentiate through the colesky decomp, whereas in the latter I don't. ")
-        xs = hk.get_state("xs")
-        ys = hk.get_state("ys")
+    """ ---- training utilities ---- """
+    def marginal_ll(self, xs, ys):
+        # computes the marginal log-likelihood of ys given xs and a posterior
+        # computed on (xs,ys). This is differentiable and uses no state
         ys_centered = self._ys_centered(xs, ys)
-        solved = cho_solve(hk.get_state("cholesky"), ys_centered)
-        data_cov = self._data_cov_with_noise(xs)
+        data_cov_w_noise = self._data_cov_with_noise(xs)
+        cholesky = cho_factor(data_cov_w_noise, lower=True)
+        solved = cho_solve(cholesky, ys_centered)
         ll = -0.5 * jnp.dot(ys_centered, solved)
-        ll += -0.5 * jnp.linalg.slogdet(data_cov)[1]
+        ll += -0.5 * jnp.linalg.slogdet(data_cov_w_noise)[1]
         ll -= xs.shape[0] / 2 * jnp.log(2 * jnp.pi)
         return ll
 
@@ -196,3 +189,5 @@ class JAXZeroMean(JAXMean):
 #     @property
 #     def variational_distribution(self):
 #         return self.variational_strategy._variational_distribution
+
+from gpytorch.models import ExactGP

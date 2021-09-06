@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
 import haiku as hk
+import jax
+
 from meta_bo.models.base.common import PositiveParameter
 from meta_bo.models.base.neural_network import JAXNeuralNetwork
 from jax import numpy as jnp
@@ -67,12 +69,12 @@ class JAXRBFKernelNN(JAXRBFKernel):
                  output_scale=1.0,
                  length_scale_constraint_gt=0.0,
                  output_scale_constraint_gt=0.0):
-
-        self.nn = JAXNeuralNetwork(input_dim, feature_dim, length_scale, layer_sizes)
         super().__init__(input_dim,
                          length_scale,
                          output_scale,
                          length_scale_constraint_gt,
                          output_scale_constraint_gt,
                          feature_dim=feature_dim,
-                         feature_map=self.nn)
+                         feature_map=None)
+        self.nn = hk.nets.MLP(output_sizes=layer_sizes + (feature_dim,), activation=jax.nn.tanh)
+        self._feature_map = self.nn
