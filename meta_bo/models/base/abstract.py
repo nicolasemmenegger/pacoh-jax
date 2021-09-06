@@ -286,6 +286,7 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         # c) convert to tensors
         return x_data, y_data
 
+
     # def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution):
     #     """
     #     Models the predictive distribution passed according to an independent, heteroscedastic Gaussian,

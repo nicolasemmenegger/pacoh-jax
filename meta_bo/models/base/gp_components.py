@@ -87,7 +87,8 @@ class JAXExactGP:
         # computed on (xs,ys). This is differentiable and uses no state
         ys_centered = self._ys_centered(xs, ys)
         data_cov_w_noise = self._data_cov_with_noise(xs)
-        cholesky = cho_factor(data_cov_w_noise, lower=True)
+        cholesky = hk.get_state("cholesky") # this is clearly wrong, but I don't get why gpytorch is any different
+        # cholesky = cho_factor(data_cov_w_noise, lower=True)
         solved = cho_solve(cholesky, ys_centered)
         ll = -0.5 * jnp.dot(ys_centered, solved)
         ll += -0.5 * jnp.linalg.slogdet(data_cov_w_noise)[1]

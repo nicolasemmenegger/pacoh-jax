@@ -154,24 +154,16 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
                                                             feature_dim, mean_nn_layers, kernel_nn_layers)
         self._init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
-
         mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
         self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
-        self.state: hk.State
-        self.params: hk.Params
+        self.prior_params: hk.Params
         self.opt_state: optax.OptState
+
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
         """ Runs the meta train loop for some number of iterations """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
-
-        if not self.fitted:
-            # Haiku init
-            self._rds, init_rng = jax.random.split(self._rds)
-            self.params, self.state = self._init_fn(init_rng, meta_train_tuples[0][0])
-            self.opt_state = self.optimizer.init(self.params)
-            # self.fitted = True
 
         t = time.time()
         cum_loss = 0.0
@@ -190,13 +182,16 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             loss = 0.0
             for i in batch_indices:
                 task_dict = task_dicts[i]
+                hk_state = task_dict['hk_state']
                 # a) get new random keys
                 self._rds, apply_rng = jax.random.split(self._rds)
 
                 # b) get value and gradient of mll
                 mll_value_and_grad = jax.value_and_grad(self._apply_fns.base_learner_mll_estimator, has_aux=True)
-                output, gradients = mll_value_and_grad(self.params, self.state, apply_rng, *task_dict)  # actually does not need anything I think
-                mll, self.state = output
+                output, gradients = mll_value_and_grad(self.params, hk_state,
+                                                       apply_rng, task_dict['xs_train'], task_dict['ys_train'])  # actually does not need anything I think
+
+                mll, task_dict['hk_state'] = output
                 loss -= mll
 
                 # c) compute and apply optimizer updates
@@ -229,7 +224,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         warnings.warn("check what this assertion is used for")
         # assert self.X_data.shape[0] == 0 and self.y_data.shape[0] == 0, "Data for posterior inference can be passed " \
-        #                                                                "only after the meta-training"
+        #
+        #                                                               "only after the meta-training"
 
         
         # for task_dict in task_dicts:
@@ -237,6 +233,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         # self.likelihood.eval()
         # self.reset_to_prior()
         return cum_loss
+
+
 
     def meta_predict(self, context_x, context_y, test_x, return_density=False):
         """
@@ -261,7 +259,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         context_x, context_y = self._prepare_data_per_task(context_x, context_y)
         test_x = self._normalize_data(test_x, None)
 
-        pred_dist, state = self._apply_fns.base_learner_fit_and_predict(self.params, self.state, self._rds, context_x, context_y, test_x)
+        # note that we use the empty_state because that corresponds to no data, by construction
+        pred_dist, state = self._apply_fns.base_learner_fit_and_predict(self.params, self.empty_state, self._rds, context_x, context_y, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
 
@@ -294,6 +293,37 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             pred_mean = pred_dist_transformed.mean
             pred_std = pred_dist_transformed.stddev
             return pred_mean, pred_std
+
+    def _prepare_meta_train_tasks(self, meta_train_tuples, flatten_y=True):
+        self._check_meta_data_shapes(meta_train_tuples)
+        if self._normalization_stats is None:
+            self._compute_meta_normalization_stats(meta_train_tuples)
+        else:
+            self._set_normalization_stats(self._normalization_stats)
+
+        if not self.fitted:
+            self._rds, init_rng = jax.random.split(self._rds) # random numbers
+            self.params, self.empty_state = self._init_fn(init_rng, meta_train_tuples[0][0]) # prior parameters, initial state
+            self.opt_state = self.optimizer.init(self.params)  # optimizer on the prior params
+
+        task_dicts = []
+
+        for xs,ys in meta_train_tuples:
+            # state of a gp can encapsulate caches of already fitted data and hopefully speed up inference
+            _, state = self._apply_fns.base_learner_fit(self.params, self.empty_state, self._rds, xs, ys)
+            task_dict = {
+                'xs_train': xs,
+                'ys_train': ys,
+                'hk_state': state
+            }
+
+            if flatten_y:
+                task_dict['ys_train'] = ys.flatten()
+
+            task_dicts.append(task_dict)
+
+        return task_dicts
+
 
 
 if __name__ == "__main__":
@@ -329,20 +359,20 @@ if __name__ == "__main__":
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=20)
+            n_iter =20  # 20000
+            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 
-            itrs += 2000
-            itrs += 2000
+            itrs += n_iter
 
             x_plot = np.linspace(-5, 5, num=150)
-            x_context, t_context, x_test, y_test = meta_test_data[0]
-            pred_mean, pred_std = pacoh_map.meta_predict(x_context, t_context, x_plot)
+            x_context, y_context, x_test, y_test = meta_test_data[0]
+            pred_mean, pred_std = pacoh_map.meta_predict(x_context, y_context, x_plot)
             # ucb, lcb = gp_model.confidence_intervals(x_context, x_plot)
 
-            plt.scatter(x_test, y_test)
-            plt.scatter(x_context, t_context)
+            plt.scatter(x_test, y_test, color="green") # the unknown target test points
+            plt.scatter(x_context, y_context) # the target train points
+            plt.plot(x_test, pred_mean) # the curve we fitted based on the target test points
 
-            plt.plot(x_plot, pred_mean)
             # plt.fill_between(x_plot, lcb, ucb, alpha=0.2)
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()
