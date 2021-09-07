@@ -156,8 +156,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         # self._apply_fns.base_learner_predict = jax.jit(self._apply_fns.base_learner_predict)
         # self._apply_fns.base_learner_mll_estimator = jax.jit(self._apply_fns.base_learner_mll_estimator)
 
-        # mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
-        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=0.0)  # mask=mask_fn)
+        mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
         self.prior_params: hk.Params
         self.opt_state: optax.OptState
 
@@ -170,6 +170,13 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         t = time.time()
         cum_loss = 0.0
         n_iter = self.num_iter_fit if n_iter is None else n_iter
+
+        def regularized_loss(params, *rest):
+            ll, state = self._apply_fns.base_learner_mll_estimator(params, *rest)
+            prior = self.ll_under_hyperprior(params)
+            return -ll - prior, state
+
+        mll_value_and_grad = jax.value_and_grad(regularized_loss, has_aux=True)
 
         for itr in range(1, n_iter + 1):
             # actual meta-training step
@@ -188,12 +195,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                 self._rds, apply_rng = jax.random.split(self._rds)
 
                 # b) get value and gradientt of mll + hyperprior ll
-                def regularized_loss(params, *rest):
-                    ll, state = self._apply_fns.base_learner_mll_estimator(params, *rest)
-                    prior = self.ll_under_hyperprior(params)
-                    return -ll - prior, state
-
-                mll_value_and_grad = jax.value_and_grad(regularized_loss, has_aux=True)
                 output, gradients = mll_value_and_grad(self.params, hk_state,
                                                        apply_rng, task_dict['xs_train'], task_dict['ys_train'])
 
@@ -243,12 +244,22 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         return cum_loss
 
     def ll_under_hyperprior(self, params):
-        mapped = hk.data_structures.map(lambda pname, name, data:  data if name != "__positive_log_scale_param" else jnp.exp(data), params)
-        flat = jnp.array(jax.tree_leaves(mapped))
+        # note to future me https://github.com/google/jax/issues/2962
+        # explains why you can't index arrays from jax.lax.fori_loop's body, which is very confusing at first
+        def map_fn(_, name, data):
+            if name == "__positive_log_scale_param":
+                data = jnp.exp(data)
+
+            if jnp.isscalar(data):
+                return jnp.array([data])
+            else:
+                return data.flatten()
+        mapped = hk.data_structures.map(map_fn, params)
+        leaves = jax.tree_leaves(mapped)
+        all_params = jnp.concatenate(leaves)
         normal = numpyro.distributions.Normal()
-        return jnp.sum(normal.log_prob(flat))
-
-
+        log_probs = normal.log_prob(all_params)
+        return jnp.sum(log_probs)
 
     def meta_predict(self, context_x, context_y, test_x, return_density=False):
         """
@@ -344,6 +355,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
 
 if __name__ == "__main__":
+    from jax.config import config
+    config.update("jax_debug_nans", True)
+
     from experiments.data_sim import SinusoidDataset
 
     data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
@@ -367,16 +381,16 @@ if __name__ == "__main__":
 
     torch.set_num_threads(2)
 
-    for weight_decay in [1]:
+    for weight_decay in [0.5]:
         pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
-                                covar_module='SE', mean_module='constant', mean_nn_layers=NN_LAYERS, feature_dim=2,
+                                covar_module='SE', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            n_iter = 300  # 2000
+            n_iter = 10  # 2000
             warnings.warn("change back n_iter")
             pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 
@@ -391,6 +405,8 @@ if __name__ == "__main__":
             plt.scatter(x_context, y_context, color="red") # the target train points
             plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
 
+            pred_prior, _ = pacoh_map.meta_predict(jnp.zeros((0,1)), jnp.zeros((0,)), x_plot)
+            plt.plot(x_plot, pred_prior.flatten(), color="red")
             lcb = pred_mean-pred_std
             ucb = pred_mean+pred_std
             plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
