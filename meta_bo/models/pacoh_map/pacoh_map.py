@@ -6,6 +6,7 @@ from typing import Callable, NamedTuple, Tuple, Collection, Union
 import haiku as hk
 import jax.random
 import numpy as np
+import numpyro.distributions
 import optax
 import torch
 from absl import logging
@@ -32,7 +33,6 @@ class BaseLearnerInterface(NamedTuple):
     """
     base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
     base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.ndarray]
-    base_learner_fit_and_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray], jnp.ndarray]
     base_learner_mll_estimator: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.float32]
 
 
@@ -45,7 +45,7 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
             assert learning_mode in ['learn_kernel', 'both'], 'neural network parameters must be learned'
             covar_module = JAXRBFKernelNN(input_dim, feature_dim, layer_sizes=kernel_nn_layers)
         elif covar_option == 'SE':
-            covar_module = JAXRBFKernel(input_dim=input_dim)
+            covar_module = JAXRBFKernel(input_dim)
         elif callable(covar_option):
             covar_module = covar_option()
             assert isinstance(covar_module, JAXKernel), "Invalid covar_module option"
@@ -69,7 +69,7 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
         likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
-        init_fn = base_learner.pred_dist
+        init_fn = base_learner.init_fn
         base_learner_fit = base_learner.fit
         base_learner_predict = base_learner.pred_dist
 
@@ -83,9 +83,7 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
         # this is the interface I want to vmap probably
         return init_fn, BaseLearnerInterface(base_learner_fit=base_learner_fit,
                                              base_learner_predict=base_learner_predict,
-                                             base_learner_mll_estimator=base_learner_mll_estimator,
-                                             base_learner_fit_and_predict=base_learner_fit_and_predict)
-
+                                             base_learner_mll_estimator=base_learner_mll_estimator)
     return factory
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
@@ -154,8 +152,12 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
                                                             feature_dim, mean_nn_layers, kernel_nn_layers)
         self._init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
-        mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
-        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
+        # self._apply_fns.base_learner_fit = jax.jit(self._apply_fns.base_learner_fit)
+        # self._apply_fns.base_learner_predict = jax.jit(self._apply_fns.base_learner_predict)
+        # self._apply_fns.base_learner_mll_estimator = jax.jit(self._apply_fns.base_learner_mll_estimator)
+
+        # mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=0.0)  # mask=mask_fn)
         self.prior_params: hk.Params
         self.opt_state: optax.OptState
 
@@ -173,9 +175,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             # actual meta-training step
             self._rds, choice_key = jax.random.split(self._rds)
             batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
-
-            warnings.warn("replace by vmap")
-
+            # print("batch_indices", batch_indices)
+            # warnings.warn("replace by vmap")
             print(itr)
 
             # Train loop
@@ -186,13 +187,20 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                 # a) get new random keys
                 self._rds, apply_rng = jax.random.split(self._rds)
 
-                # b) get value and gradient of mll
-                mll_value_and_grad = jax.value_and_grad(self._apply_fns.base_learner_mll_estimator, has_aux=True)
-                output, gradients = mll_value_and_grad(self.params, hk_state,
-                                                       apply_rng, task_dict['xs_train'], task_dict['ys_train'])  # actually does not need anything I think
+                # b) get value and gradientt of mll + hyperprior ll
+                def regularized_loss(params, *rest):
+                    ll, state = self._apply_fns.base_learner_mll_estimator(params, *rest)
+                    prior = self.ll_under_hyperprior(params)
+                    return -ll - prior, state
 
-                mll, task_dict['hk_state'] = output
-                loss -= mll
+                mll_value_and_grad = jax.value_and_grad(regularized_loss, has_aux=True)
+                output, gradients = mll_value_and_grad(self.params, hk_state,
+                                                       apply_rng, task_dict['xs_train'], task_dict['ys_train'])
+
+
+                # how to put in the regularisation term here?
+                mll_reg, task_dict['hk_state'] = output
+                loss += mll_reg
 
                 # c) compute and apply optimizer updates
                 updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
@@ -234,6 +242,12 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         # self.reset_to_prior()
         return cum_loss
 
+    def ll_under_hyperprior(self, params):
+        mapped = hk.data_structures.map(lambda pname, name, data:  data if name != "__positive_log_scale_param" else jnp.exp(data), params)
+        flat = jnp.array(jax.tree_leaves(mapped))
+        normal = numpyro.distributions.Normal()
+        return jnp.sum(normal.log_prob(flat))
+
 
 
     def meta_predict(self, context_x, context_y, test_x, return_density=False):
@@ -260,9 +274,12 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         test_x = self._normalize_data(test_x, None)
 
         # note that we use the empty_state because that corresponds to no data, by construction
-        pred_dist, state = self._apply_fns.base_learner_fit_and_predict(self.params, self.empty_state, self._rds, context_x, context_y, test_x)
+        self._rds, fit_key = jax.random.split(self._rds)
+        _, fitted_state = self._apply_fns.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
+        self._rds, pred_key =  jax.random.split(self._rds)
+        pred_dist, state = self._apply_fns.base_learner_predict(self.params, fitted_state, pred_key, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
-                                                              normalization_std=self.y_std)
+                                                             normalization_std=self.y_std)
 
         if return_density:
             return pred_dist_transformed
@@ -350,7 +367,7 @@ if __name__ == "__main__":
 
     torch.set_num_threads(2)
 
-    for weight_decay in [0.5]:
+    for weight_decay in [1]:
         pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='SE', mean_module='constant', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
@@ -359,7 +376,8 @@ if __name__ == "__main__":
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            n_iter =20  # 20000
+            n_iter = 300  # 2000
+            warnings.warn("change back n_iter")
             pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 
             itrs += n_iter
@@ -370,9 +388,11 @@ if __name__ == "__main__":
             # ucb, lcb = gp_model.confidence_intervals(x_context, x_plot)
 
             plt.scatter(x_test, y_test, color="green") # the unknown target test points
-            plt.scatter(x_context, y_context) # the target train points
-            plt.plot(x_test, pred_mean) # the curve we fitted based on the target test points
+            plt.scatter(x_context, y_context, color="red") # the target train points
+            plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
 
-            # plt.fill_between(x_plot, lcb, ucb, alpha=0.2)
+            lcb = pred_mean-pred_std
+            ucb = pred_mean+pred_std
+            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()

@@ -31,7 +31,9 @@ class RegressionModel(ABC):
         self.normalize_data = normalize_data
         self.xs_data = jnp.zeros((0, self.input_dim), dtype=np.double)
         self.ys_data = jnp.zeros((0,), dtype=np.double)
+        self._num_train_points = 0
         self._rds = random_state if random_state is not None else jax.random.PRNGKey(42)
+
 
     """ ------ Public Methods ------ """
     def add_data(self, xs: np.ndarray, ys: Union[float, np.ndarray]):
@@ -65,10 +67,10 @@ class RegressionModel(ABC):
         # concatenate to new datapoints
         self.xs_data = np.concatenate([self.xs_data, xs])
         self.ys_data = np.concatenate([self.ys_data, ys])
-        self._num_train_points += y.shape[0]
+        self._num_train_points += ys.shape[0]
 
         assert self.xs_data.shape[0] == self.ys_data.shape[0]
-        assert self._num_train_points == 1 or self.X_data.shape[0] == self._num_train_points
+        assert self._num_train_points == 1 or self.xs_data.shape[0] == self._num_train_points
 
         self._recompute_posterior()
 
@@ -143,7 +145,6 @@ class RegressionModel(ABC):
         self._num_train_points = 0
 
     def _set_normalization_stats(self, normalization_stats_dict=None):
-        raise NotImplementedError
         if normalization_stats_dict is None:
             self.x_mean, self.y_mean = np.zeros(self.input_dim), np.zeros(1)
             self.x_std, self.y_std = np.ones(self.input_dim), np.ones(1)
@@ -252,7 +253,6 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         """
         Expects y to be flattened
         """
-        print(meta_train_tuples)
         xs_stack, ys_stack = map(list, zip(*[_handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
                                              meta_train_tuples]))
         all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)

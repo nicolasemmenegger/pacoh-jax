@@ -53,8 +53,12 @@ class JAXRBFKernel(JAXKernel):
         # Temporary hack => call with no setup covariance function
         super().__init__(input_dim, None)
 
-        self.output_scale = PositiveParameter(initial_value=output_scale, boundary_value=output_scale_constraint_gt)
-        self.length_scale = PositiveParameter(initial_value=length_scale, boundary_value=length_scale_constraint_gt)
+        self.output_scale = PositiveParameter(initial_value=output_scale,
+                                              boundary_value=output_scale_constraint_gt,
+                                              name="OutputScale")
+        self.length_scale = PositiveParameter(initial_value=length_scale,
+                                              boundary_value=length_scale_constraint_gt,
+                                              name="LengthScale")
         covar_fn = functools.partial(rbf_cov, ls_param=self.length_scale, os_param=self.output_scale)
         self._covar_fn = covar_fn
         self._feature_dim = feature_dim
@@ -78,3 +82,20 @@ class JAXRBFKernelNN(JAXRBFKernel):
                          feature_map=None)
         self.nn = hk.nets.MLP(output_sizes=layer_sizes + (feature_dim,), activation=jax.nn.tanh)
         self._feature_map = self.nn
+
+def forward(x1, x2):
+    kernel = JAXRBFKernelNN(input_dim=1,
+                             feature_dim=1)
+    return kernel(x1, x2)
+
+if __name__ == "__main__":
+    rng = jax.random.PRNGKey(42)
+    rng, initkey = jax.random.split(rng)
+    init, apply = hk.transform(forward)
+    x1 = jnp.ones(1)
+    x2 = jnp.zeros(1)
+    params = init(rng, x1, x2)
+    val, grad = jax.value_and_grad(apply)(params, rng, x1, x2)
+    print(params)
+    print(val)
+    print(grad)

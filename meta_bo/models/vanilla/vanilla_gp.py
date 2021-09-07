@@ -1,5 +1,6 @@
 import warnings
 
+import jax
 import jax.numpy as jnp
 import jax.random
 import numpy as np
@@ -10,7 +11,28 @@ from meta_bo.models.base.kernels import JAXRBFKernel
 from meta_bo.models.base.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
 from meta_bo.models.base.abstract import RegressionModel
 from meta_bo.models.util import _handle_batch_input_dimensionality
-from typing import Dict
+from typing import Dict, NamedTuple, Any
+import haiku as hk
+
+class VanillaInterface(NamedTuple):
+    fit_fn: Any
+    pred_dist_fn: Any
+    prior_fn: Any
+
+def construct_vanilla_gp_forward_fns(input_dim, kernel_outputscale, kernel_lengthscale, likelihood_variance):
+    def factory():
+        # Initialize the mean module with a zero-mean, and use an RBF kernel with *no* learned feature map
+        mean_module = JAXConstantMean(0.0)
+        covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale)
+        likelihood = JAXGaussianLikelihood(likelihood_variance)
+        gp = JAXExactGP(mean_module,
+                        covar_module,
+                        likelihood)
+
+        # choose gp.pred_dist as the template function, as it includes the likelihood
+        return gp.init_fn, VanillaInterface(fit_fn=gp.fit, pred_dist_fn=gp.pred_dist, prior_fn=gp.prior)
+
+    return factory
 
 
 class GPRegressionVanilla(RegressionModel):
@@ -44,14 +66,15 @@ class GPRegressionVanilla(RegressionModel):
         # Set up the boilerplate RegressionModel
         super().__init__(input_dim=input_dim, normalize_data=normalize_data, random_state=random_state)
         self._set_normalization_stats(normalization_stats)
+        factory = construct_vanilla_gp_forward_fns(input_dim,
+                                                   kernel_outputscale,
+                                                   kernel_lengthscale,
+                                                   likelihood_variance)
 
-        # Initialize the mean module with a zero-mean, and use an RBF kernel with *no* learned feature map
-        self.mean_module = JAXConstantMean(0.0)
-        self.covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale)
-        self.likelihood = JAXGaussianLikelihood(likelihood_variance)
-        self.gp = JAXExactGP(self.mean_module,
-                             self.covar_module,
-                             self.likelihood)
+        init_fn, self._apply_fns = hk.multi_transform_with_state(factory)
+        self._rds, init_key = jax.random.split(self._rds)
+        # initialize parameters using some dummy data
+        self._params, self._state = init_fn(init_key, jnp.ones((1, input_dim)))
 
     def predict(self, test_x, return_density=False, **kwargs):
         """
@@ -69,9 +92,8 @@ class GPRegressionVanilla(RegressionModel):
         """
         test_x = _handle_batch_input_dimensionality(test_x)
         test_x_normalized = self._normalize_data(test_x)
-
-        warnings.warn("Check normalization")
-        pred_dist = self.gp.pred_dist(test_x_normalized)
+        self._rds, predict_key = jax.random.split(self._rds)
+        pred_dist, self._state = self._apply_fns.pred_dist_fn(self._params, self._state, predict_key, test_x_normalized)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist,
                                                               normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
@@ -83,12 +105,14 @@ class GPRegressionVanilla(RegressionModel):
             return pred_mean, pred_std
 
     def reset_to_prior(self):
+        raise NotImplementedError
         self._reset_data()
         self.gp.reset_to_prior()
 
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
-        self.gp.fit(self.X_data, self.y_data)
+        self._rds, fit_key = jax.random.split(self._rds)
+        _, self._state = self._apply_fns.fit_fn(self._params, self._state, fit_key, self.xs_data, self.ys_data)
 
     def _prior(self, xs: jnp.ndarray):
         """Returns the prior of the underlying GP for the given datapoints.
@@ -99,7 +123,7 @@ class GPRegressionVanilla(RegressionModel):
         Returns:
             The prior distributions
         """
-        return self.gp.prior(xs)
+        return self._prior_fn(xs)
 
 
     # def predict_mean_std(self, test_x):
@@ -144,13 +168,14 @@ if __name__ == "__main__":
     gp_mll.add_data(x_data_train, y_data_train)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
-    x_tens = torch.tensor(x_plot).squeeze()
 
     pred_dist = gp_mll.predict(x_plot, return_density=True)
     pred_mean, pred_std = pred_dist.mean, pred_dist.stddev
-    lcb, ucb = gp_mll.confidence_intervals(x_plot)
+    lcb, ucb = pred_mean-pred_std, pred_mean + pred_std
+    lcb, ucb = lcb.flatten(), ucb.flatten()
+    plt.plot(x_plot, pred_mean)
     plt.fill_between(x_plot, lcb, ucb, alpha=0.4)
 
     plt.scatter(x_data_test, y_data_test)
-    plt.plot(x_plot, pred_mean)
+    plt.scatter(x_data_train, y_data_train)
     plt.show()

@@ -21,32 +21,34 @@ class JAXExactGP:
         :param likelihood:
         """
         self.mean_module = mean_module
-        self.noise_variance = likelihood.variance
         self.likelihood = likelihood
 
         self.cov_vec_vec = cov_module
-        self.cov_vec_set = vmap(cov_module.__call__, (None, 0))
-        self.cov_set_set = vmap(self.cov_vec_set.__call__, (0, None))
-        self.mean_set = vmap(self.mean_module.__call__)
+        self.cov_vec_set = hk.vmap(cov_module.__call__, (None, 0))
+        self.cov_set_set = hk.vmap(self.cov_vec_set.__call__, (0, None))
+        self.mean_set = hk.vmap(self.mean_module.__call__)
+
+    def init_fn(self, dummy_xs):
+        """Haiku initialiser"""
         hk.set_state("xs", jnp.zeros((0, 1), dtype=jnp.float32))
         hk.set_state("ys", jnp.zeros((0,), dtype=jnp.float32))
-
+        return self.pred_dist(dummy_xs)
 
     def _ys_centered(self, xs, ys):
         return ys - self.mean_set(xs).flatten()
 
     def _data_cov_with_noise(self, xs):
         data_cov = self.cov_set_set(xs, xs)
-        return data_cov + jnp.eye(*data_cov.shape) * self.noise_variance()
+        return data_cov + jnp.eye(*data_cov.shape) * self.likelihood.variance()
 
     def fit(self, xs: jnp.ndarray, ys: jnp.ndarray) -> None:
         """ Fit adds the data in any case, stores cholesky if we are at eval stage for later reuse"""
-        hk.set_state("xs", xs)
-        hk.set_state("ys", ys)
+        hk.set_state("xs", jnp.array(xs))
+        hk.set_state("ys", jnp.array(ys))
         data_cov_w_noise = self._data_cov_with_noise(xs)
         hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True))
 
-    @functools.partial(vmap, in_axes=(None, 0))
+    @functools.partial(hk.vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
         xs = hk.get_state("xs")
         ys = hk.get_state("ys")
@@ -60,18 +62,18 @@ class JAXExactGP:
         else:
             return self._prior(x)
 
-    def pred_dist(self, x, noiseless=False):
+    def pred_dist(self, xs_test):
         """prediction with noise"""
-        predictive_dist_noiseless = self.posterior(x)
+        predictive_dist_noiseless = self.posterior(xs_test)
         return self.likelihood(predictive_dist_noiseless)
 
-    @functools.partial(vmap, in_axes=(None, 0))
+    @functools.partial(hk.vmap, in_axes=(None, 0))
     def prior(self, x):
         return self._prior(x)
 
     def _prior(self, x):
         mean = self.mean_module(x)
-        stddev = jnp.sqrt(self.cov_vec_vec(x, x))
+        stddev = jnp.sqrt(self.cov_vec_vec(x, x)) # I am slightly surprised by this result
         return numpyro.distributions.Normal(loc=mean, scale=stddev)
 
     def add_data_and_refit(self, xs, ys):
@@ -87,7 +89,8 @@ class JAXExactGP:
         # computed on (xs,ys). This is differentiable and uses no state
         ys_centered = self._ys_centered(xs, ys)
         data_cov_w_noise = self._data_cov_with_noise(xs)
-        cholesky = hk.get_state("cholesky") # this is clearly wrong, but I don't get why gpytorch is any different
+        cholesky = cho_factor(data_cov_w_noise, lower=True)
+        # cholesky = hk.get_state("cholesky") # this is clearly wrong, but I don't get why gpytorch is any different
         # cholesky = cho_factor(data_cov_w_noise, lower=True)
         solved = cho_solve(cholesky, ys_centered)
         ll = -0.5 * jnp.dot(ys_centered, solved)
