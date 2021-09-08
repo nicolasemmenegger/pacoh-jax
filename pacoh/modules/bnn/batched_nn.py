@@ -85,6 +85,7 @@ class MLP(BatchedModule):
         return self.output_layer(x)
 
 
+
 class BatchedMLP(BatchedModule):
     def __init__(self, n_batched_models, input_size, output_size, hidden_sizes, activation=None):
         super().__init__(n_batched_models)

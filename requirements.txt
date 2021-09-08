@@ -13,3 +13,4 @@ git+https://github.com/deepmind/dm-haiku
 numpyro~=0.7.2
 optax~=0.0.9
 setuptools~=57.0.0
+tensorflow

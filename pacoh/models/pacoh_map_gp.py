@@ -12,24 +12,21 @@ import torch
 from absl import logging
 from jax import numpy as jnp
 
-from meta_bo.models.base.abstract import RegressionModelMetaLearned
-from meta_bo.models.base.data_handling import Statistics
-from meta_bo.models.base.distributions import AffineTransformedDistribution
-from meta_bo.models.base.distributions import JAXGaussianLikelihood
-from meta_bo.models.base.gp_components import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
-from meta_bo.models.base.gradient_updater import GradientUpdater
-from meta_bo.models.base.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
-from meta_bo.models.base.neural_network import JAXNeuralNetwork
-from meta_bo.models.util import _handle_batch_input_dimensionality
+from pacoh.modules.abstract import RegressionModelMetaLearned
+from pacoh.modules.data_handling import Statistics
+from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
+from pacoh.modules.gp.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
+from pacoh.modules.gp.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
+from pacoh.modules.util import _handle_batch_input_dimensionality
 
 class BaseLearnerInterface(NamedTuple):
     """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
     kernel, mean and likelihood, but needs to perform target inference in parallel. """
-    """This is the interface PACOH base learners should provide.
+    """This is the interface PACOH modules learners should provide.
     hyper_prior_ll: A function that yields the log likelihood of the prior parameters under the hyperprior
-    base_learner_fit: Fits the base learner to some data # maybe I need state here
+    base_learner_fit: Fits the modules learner to some data # maybe I need state here
     base_learner_predict: Actual predict on a task
-    base_learner_mll_estimator: The mll of the base estimator under the data one just passed it
+    base_learner_mll_estimator: The mll of the modules estimator under the data one just passed it
     """
     base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
     base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.ndarray]
@@ -122,7 +119,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         """
         super().__init__(normalize_data, random_seed)
 
-        assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla'], 'Invalid learning mode'
+        assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla_gp'], 'Invalid learning mode'
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
 
@@ -381,7 +378,7 @@ if __name__ == "__main__":
 
     torch.set_num_threads(2)
 
-    for weight_decay in [0.5]:
+    for weight_decay in [1.0]:
         pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='SE', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)

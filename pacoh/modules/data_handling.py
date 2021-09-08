@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Dict, NamedTuple
 
-from meta_bo.models.util import _handle_batch_input_dimensionality
+from pacoh.modules.util import _handle_batch_input_dimensionality
 
 
 class Statistics(NamedTuple):

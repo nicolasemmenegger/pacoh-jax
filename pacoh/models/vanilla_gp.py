@@ -1,16 +1,14 @@
-import warnings
-
 import jax
 import jax.numpy as jnp
 import jax.random
 import numpy as np
 import numpyro.distributions
 
-from meta_bo.models.base.gp_components import JAXExactGP, JAXConstantMean
-from meta_bo.models.base.kernels import JAXRBFKernel
-from meta_bo.models.base.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
-from meta_bo.models.base.abstract import RegressionModel
-from meta_bo.models.util import _handle_batch_input_dimensionality
+from pacoh.modules import JAXExactGP, JAXConstantMean
+from pacoh.modules.gp.kernels import JAXRBFKernel
+from pacoh.modules import AffineTransformedDistribution, JAXGaussianLikelihood
+from pacoh.modules.abstract import RegressionModel
+from pacoh.modules.util import _handle_batch_input_dimensionality
 from typing import Dict, NamedTuple, Any
 import haiku as hk
 

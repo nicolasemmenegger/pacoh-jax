@@ -1,13 +1,11 @@
 import functools
 import warnings
-from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
 import haiku as hk
 import jax
 
-from meta_bo.models.base.common import PositiveParameter
-from meta_bo.models.base.neural_network import JAXNeuralNetwork
+from pacoh.modules.common import PositiveParameter
 from jax import numpy as jnp
 
 
