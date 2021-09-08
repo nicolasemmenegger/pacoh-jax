@@ -13,7 +13,7 @@ import haiku as hk
 from pacoh.modules.abstract import RegressionModel
 
 
-def get_batched_module(init_fn, apply_fns):
+def _get_batched_module(init_fn, apply_fns, single=True, with_state=False):
     """ Takes an init function and either a single apply funciton or a tuple thereof, and returns
         batched module versions of them. This means it initialises a number of models in paralels
         Args:
@@ -32,45 +32,56 @@ def get_batched_module(init_fn, apply_fns):
        """
 
     """batched.init returns a batch of model parameters, which is why it takes n different random keys"""
-    batched_init = vmap(init_fn, in_axes=(0,None))
-    if callable(apply_fns):
+    batched_init = vmap(init_fn, in_axes=(0, None))
+    # if our transformed modules use hk.get_state and hk.set_state, we have to have one more vmapped dimension
+    if with_state:
+        batched_dims = (0, 0, 0, None)
+        batched_dims_batch_inputs = (0, 0, 0, 0)
+    else:
+        batched_dims = (0, 0, None)
+        batched_dims_batch_inputs = (0, 0, 0)
+
+    if single:
         # there is only one apply function
-        apply_batched = vmap(apply_fns, in_axes=(0,0,None))
-        apply_batched_batched_inputs = vmap(apply_fns, in_axes=(0,0,0))
+        apply_batched = vmap(apply_fns, in_axes=batched_dims)
+        apply_batched_batched_inputs = vmap(apply_fns, in_axes=batched_dims_batch_inputs)
         return batched_init, apply_batched, apply_batched_batched_inputs
     else:
+        # there are multiple apply functions (see also hk.multi_transform and hk.multi_transform_with_state)
         apply_dict = {}
         apply_dict_batched_inputs = {}
-
         for fname, func in apply_fns._asdict().iteritems():
-            apply_dict[fname] = vmap(func, in_axes=(0,0,None))
-            apply_dict_batched_inputs[fname]  = vmap(func, in_axes=(0,0,0))
+            apply_dict[fname] = vmap(func, in_axes=batched_dims)
+            apply_dict_batched_inputs[fname]  = vmap(func, in_axes=batched_dims_batch_inputs)
 
         return batched_init, apply_fns.__class__(**apply_dict), apply_fns.__class__(**apply_dict_batched_inputs)
 
-
-def batched_module(constructor_fn):
-    """ Decorator that takes a function returning pure functions and makes them batched """
+def transform_and_batch_module(constructor_fn):
     def batched_constructor_fn(*args, **kwargs):
-        return get_batched_module(*constructor_fn(*args, **kwargs))
-
+        return _get_batched_module(*hk.transform(constructor_fn(*args, **kwargs)), single=True)
     return batched_constructor_fn
 
+def transform_and_batch_module_with_state(constructor_fn):
+    def batched_constructor_fn(*args, **kwargs):
+        return _get_batched_module(*hk.transform(constructor_fn(*args, **kwargs)), single=True, with_state=True)
+    return batched_constructor_fn
 
-@batched_module
-def get_pure_nn_functions(output_dim, hidden_layer_sizes, activation):
+def multi_transform_and_batch_module(constructor_fn):
+    def multi_transformed_batched_constructor_fn(*args, **kwargs):
+        return _get_batched_module(*hk.transform(constructor_fn(*args, **kwargs)), single=False)
+    return multi_transformed_batched_constructor_fn
+
+def multi_transform_and_batch_module(constructor_fn):
+    def multi_transformed_batched_constructor_fn(*args, **kwargs):
+        return _get_batched_module(*hk.transform(constructor_fn(*args, **kwargs)), single=False)
+    return multi_transformed_batched_constructor_fn
+
+@transform_and_batch_module
+def get_pure_batched_nn_functions(output_dim, hidden_layer_sizes, activation):
     def forward(xs):
         nn = hk.nets.MLP(output_sizes=hidden_layer_sizes+(output_dim,), activation=activation)
         return nn(xs)
-    return hk.transform(forward)
-
-
-
-
-
-
-
-
+    return forward
 
 
 # class BayesianNeuralNetworkVI(RegressionModel):
@@ -165,16 +176,19 @@ def get_pure_nn_functions(output_dim, hidden_layer_sizes, activation):
 if __name__ == '__main__':
     rds = jax.random.PRNGKey(42)
     batch_size_vi = 3
-    init_batched, batched_forward, batched_forward_batch_inputs = get_pure_nn_functions(1, (32, 32), jax.nn.elu)
+    init_batched, batched_forward, batched_forward_batch_inputs = get_pure_batched_nn_functions(1, (32, 32), jax.nn.elu)
     print(init_batched)
     keys = jax.random.split(rds, batch_size_vi+1)
     rds = keys[0]
     init_keys = keys[1:]
     x = jnp.ones((1, 1), dtype=jnp.float32)
-
-    all_params = init_batched(init_keys, init_keys)
-    print(all_params)
-
+    all_params = init_batched(init_keys, x)
+    xs1 = jnp.array([[1], [2]])
+    outs = batched_forward(all_params, init_keys, xs1)
+    print("1ton", outs)
+    xs2 = jnp.array([[[1]], [[2]], [[1]]])
+    outs2 = batched_forward_batch_inputs(all_params, init_keys, xs2)
+    print("1to1", outs2)
     # import numpy as np
     #
     # np.random.seed(0)
