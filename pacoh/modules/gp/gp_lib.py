@@ -1,4 +1,5 @@
 import functools
+
 import numpyro.distributions
 from abc import ABC, abstractmethod
 from jax import numpy as jnp, vmap
@@ -32,7 +33,9 @@ class JAXExactGP:
         """Haiku initialiser"""
         hk.set_state("xs", jnp.zeros((0, 1), dtype=jnp.float32))
         hk.set_state("ys", jnp.zeros((0,), dtype=jnp.float32))
-        return self.pred_dist(dummy_xs)
+        hk.set_state("cholesky", (jnp.zeros((0, 0), dtype=jnp.float32), True))
+        return self.likelihood(self._prior(dummy_xs))
+
 
     def _ys_centered(self, xs, ys):
         return ys - self.mean_set(xs).flatten()
@@ -46,21 +49,34 @@ class JAXExactGP:
         hk.set_state("xs", jnp.array(xs))
         hk.set_state("ys", jnp.array(ys))
         data_cov_w_noise = self._data_cov_with_noise(xs)
-        hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True))
+        hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True)[0])
 
     @functools.partial(hk.vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
-        xs = hk.get_state("xs")
-        ys = hk.get_state("ys")
-        if xs.size > 0:
+        xs = hk.get_state("xs", dtype=jnp.float32)
+        ys = hk.get_state("ys", dtype=jnp.float32)
+        chol = hk.get_state("cholesky", dtype=jnp.float32)
+
+        def has_data(operand):
             # we have data
+            x, xs, chol = operand
             new_cov_row = self.cov_vec_set(x, xs)
-            mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), self._ys_centered(xs, ys)))
-            var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve(hk.get_state("cholesky"), new_cov_row))
+            mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve((chol, True), self._ys_centered(xs, ys)))
+            var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
             std = jnp.sqrt(var)
             return numpyro.distributions.Normal(loc=mean, scale=std)
-        else:
+
+        def no_data(operand):
+            x, _, __ = operand
             return self._prior(x)
+
+        # TODO warning: this is quite confusing. I had this as a jax.lax.cond/hk.cond, but because the distinction
+        # is on the size of xs, we cannot use these constructs, because they exactly assume that the size of
+        # the inputs of both branches is the same
+        if xs.size > 0:
+            return has_data((x, xs, chol))
+        else:
+            return no_data((x, xs, chol))
 
     def pred_dist(self, xs_test):
         """prediction with noise"""
@@ -89,9 +105,7 @@ class JAXExactGP:
         # computed on (xs,ys). This is differentiable and uses no state
         ys_centered = self._ys_centered(xs, ys)
         data_cov_w_noise = self._data_cov_with_noise(xs)
-        cholesky = cho_factor(data_cov_w_noise, lower=True)
-        # cholesky = hk.get_state("cholesky") # this is clearly wrong, but I don't get why gpytorch is any different
-        # cholesky = cho_factor(data_cov_w_noise, lower=True)
+        cholesky = cho_factor(data_cov_w_noise)
         solved = cho_solve(cholesky, ys_centered)
         ll = -0.5 * jnp.dot(ys_centered, solved)
         ll += -0.5 * jnp.linalg.slogdet(data_cov_w_noise)[1]
@@ -127,71 +141,3 @@ class JAXZeroMean(JAXMean):
 
     def __call__(self, x):
         return jnp.zeros(x.shape)
-
-
-#
-# from gpytorch.models.approximate_gp import ApproximateGP
-# from gpytorch.variational import CholeskyVariationalDistribution
-# from gpytorch.variational import VariationalStrategy
-#
-#
-# class LearnedGPRegressionModelApproximate(ApproximateGP):
-#     """GP model which can take a learned mean and learned kernel function."""
-#
-#     def __init__(self, train_x, train_y, likelihood, learned_kernel=None, learned_mean=None, mean_module=None,
-#                  covar_module=None, beta=1.0):
-#
-#         self.beta = beta
-#         self.n_train_samples = train_x.shape[0]
-#
-#         variational_distribution = CholeskyVariationalDistribution(self.n_train_samples)
-#         variational_strategy = VariationalStrategy(self, train_x, variational_distribution,
-#                                                    learn_inducing_locations=False)
-#         super().__init__(variational_strategy)
-#
-#         if mean_module is None:
-#             self.mean_module = gpytorch.means.ZeroMean()
-#         else:
-#             self.mean_module = mean_module
-#
-#         self.covar_module = covar_module
-#
-#         self.learned_kernel = learned_kernel
-#         self.learned_mean = learned_mean
-#         self.likelihood = likelihood
-#
-#     def forward(self, x):
-#         # feed through kernel NN
-#         if self.learned_kernel is not None:
-#             projected_x = self.learned_kernel(x)
-#         else:
-#             projected_x = x
-#
-#         # feed through mean module
-#         if self.learned_mean is not None:
-#             mean_x = self.learned_mean(x).squeeze()
-#         else:
-#             mean_x = self.mean_module(projected_x).squeeze()
-#
-#         covar_x = self.covar_module(projected_x)
-#         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-#
-#     def prior(self, x):
-#         return self.forward(x)
-#
-#     def kl(self):
-#         return self.variational_strategy.kl_divergence()
-#
-#     def pred_dist(self, x):
-#         self.eval()
-#         return self.likelihood(self.__call__(x))
-#
-#     def pred_ll(self, x, y):
-#         variational_dist_f = self.__call__(x)
-#         return self.likelihood.expected_log_prob(y, variational_dist_f).sum(-1)
-#
-#     @property
-#     def variational_distribution(self):
-#         return self.variational_strategy._variational_distribution
-
-from gpytorch.models import ExactGP

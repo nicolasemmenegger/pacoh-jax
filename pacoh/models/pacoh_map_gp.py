@@ -11,13 +11,15 @@ import optax
 import torch
 from absl import logging
 from jax import numpy as jnp
+from jax.lax.linalg import cholesky
 
 from pacoh.modules.abstract import RegressionModelMetaLearned
 from pacoh.modules.data_handling import Statistics
 from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
 from pacoh.modules.gp.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
 from pacoh.modules.gp.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
-from pacoh.modules.util import _handle_batch_input_dimensionality
+from pacoh.modules.util import _handle_batch_input_dimensionality, pytrees_stack
+
 
 class BaseLearnerInterface(NamedTuple):
     """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
@@ -149,9 +151,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, mean_module, covar_module, learning_mode,
                                                             feature_dim, mean_nn_layers, kernel_nn_layers)
         self._init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
-        # self._apply_fns.base_learner_fit = jax.jit(self._apply_fns.base_learner_fit)
-        # self._apply_fns.base_learner_predict = jax.jit(self._apply_fns.base_learner_predict)
-        # self._apply_fns.base_learner_mll_estimator = jax.jit(self._apply_fns.base_learner_mll_estimator)
+        # jit compile the pure mll function, as this is the bottleneck
+        self._apply_fns = self._apply_fns._replace(
+            base_learner_mll_estimator=jax.jit(self._apply_fns.base_learner_mll_estimator)
+        )
 
         mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
         self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
@@ -168,41 +171,42 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         cum_loss = 0.0
         n_iter = self.num_iter_fit if n_iter is None else n_iter
 
-        def regularized_loss(params, *rest):
-            ll, state = self._apply_fns.base_learner_mll_estimator(params, *rest)
+        # construct the loss function
+        def regularized_loss(params, state, rng, xs, ys):
+            ll, state = self._apply_fns.base_learner_mll_estimator(params, state, rng, xs, ys)
             prior = self.ll_under_hyperprior(params)
             return -ll - prior, state
 
-        mll_value_and_grad = jax.value_and_grad(regularized_loss, has_aux=True)
+        # batching
+        batched_losses_and_states = jax.vmap(regularized_loss, in_axes=(None, 0, 0, 0, 0), out_axes=(0,0))
+        def cumulative_loss(*args):
+            lls, states = batched_losses_and_states(*args)
+            return jnp.sum(lls), states
+
+        # auto differentiation and jit compilation
+        batched_mll_value_and_grad = jax.value_and_grad(cumulative_loss, has_aux=True)
+        batched_mll_value_and_grad = jax.jit(batched_mll_value_and_grad)
 
         for itr in range(1, n_iter + 1):
-            # actual meta-training step
+            print(itr)
+            # a) choose a minibatch. TODO: make this more elegant
             self._rds, choice_key = jax.random.split(self._rds)
             batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
-            # print("batch_indices", batch_indices)
-            # warnings.warn("replace by vmap")
-            print(itr)
+            batch = [task_dicts[i] for i in batch_indices]
+            batched_xs = jnp.array([task['xs_train'] for task in batch])
+            batched_ys = jnp.array([task['ys_train'] for task in batch])
+            batched_states = pytrees_stack([task['hk_state'] for task in batch])
+            apply_rngs = jax.random.split(self._rds, 1+self.task_batch_size)
+            self._rds = apply_rngs[0]
+            apply_rngs = apply_rngs[1:]
 
-            # Train loop
-            loss = 0.0
-            for i in batch_indices:
-                task_dict = task_dicts[i]
-                hk_state = task_dict['hk_state']
-                # a) get new random keys
-                self._rds, apply_rng = jax.random.split(self._rds)
+            # b) get value and gradient
+            output, gradients = batched_mll_value_and_grad(self.params, batched_states, apply_rngs, batched_xs, batched_ys)
+            loss, states = output  # we don't actually need the states
 
-                # b) get value and gradientt of mll + hyperprior ll
-                output, gradients = mll_value_and_grad(self.params, hk_state,
-                                                       apply_rng, task_dict['xs_train'], task_dict['ys_train'])
-
-
-                # how to put in the regularisation term here?
-                mll_reg, task_dict['hk_state'] = output
-                loss += mll_reg
-
-                # c) compute and apply optimizer updates
-                updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
-                self.params = optax.apply_updates(self.params, updates)
+            # c) compute and apply optimizer updates
+            updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
+            self.params = optax.apply_updates(self.params, updates)
 
             cum_loss += loss
 
@@ -233,11 +237,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         #
         #                                                               "only after the meta-training"
 
-        
-        # for task_dict in task_dicts:
-        #     task_dict['model'].eval()
-        # self.likelihood.eval()
-        # self.reset_to_prior()
         return cum_loss
 
     def ll_under_hyperprior(self, params):
@@ -354,6 +353,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 if __name__ == "__main__":
     from jax.config import config
     config.update("jax_debug_nans", True)
+    config.update('jax_disable_jit', False)
 
     from experiments.data_sim import SinusoidDataset
 
@@ -387,7 +387,7 @@ if __name__ == "__main__":
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            n_iter = 10  # 2000
+            n_iter = 300
             warnings.warn("change back n_iter")
             pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 

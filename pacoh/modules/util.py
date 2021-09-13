@@ -1,5 +1,6 @@
 from typing import Optional
 
+import jax
 import numpy as np
 import os
 import logging
@@ -128,6 +129,12 @@ def get_logger(log_dir=None, log_file='output.log', expname=''):
         else:
             logger.log_dir = None
     return logger
+
+# https://github.com/bryanhpchiang/rt/blob/master/utils/transforms.py#L5
+def pytrees_stack(pytrees, axis=0):
+    results = jax.tree_multimap(
+        lambda *values: jax.numpy.stack(values, axis=axis), *pytrees)
+    return results
 
 
 """ ------ Lightweight mltiprocessing utilities ------ """

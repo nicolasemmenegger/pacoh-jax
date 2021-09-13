@@ -13,7 +13,7 @@ class Statistics(NamedTuple):
 class DataNormalizer:
     """ A class that abstracts away common data storage and normalization tasks """
     def __init__(self, input_dim, normalization_stats: Statistics = None):
-        """ The standard constructur
+        """ The standard constructor
         """
         self.input_dim = input_dim
         if normalization_stats is not None:

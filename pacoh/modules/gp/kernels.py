@@ -27,7 +27,6 @@ class JAXKernel(hk.Module):
         assert (feature_map is not None and feature_dim is not None) or (feature_map is None and feature_dim is None), \
             "either both the map and feature dim have to be none, or neither should"
 
-        warnings.warn("I should probably switch feature dim and input dim")
         # kernel module
         self._covar_fn = covar_fn
         self._input_dim = input_dim

@@ -4,7 +4,7 @@ from typing import Optional, Dict, Union
 
 import jax
 from haiku import Transformed, TransformedWithState, MultiTransformed, MultiTransformedWithState
-from jax import vmap, numpy as jnp
+from jax import vmap, numpy as jnp, jit
 import haiku as hk
 
 from pacoh.models.pacoh_map_gp import BaseLearnerInterface
@@ -108,6 +108,11 @@ multi_transform_and_batch_module_with_state = functools.partial(_transform_batch
 
 """ ------ Testing code ------- """
 if __name__ == "__main__":
+    from jax.config import config
+
+    # config.update("jax_debug_nans", True)
+    # config.update('jax_disable_jit', True)
+
     # some testing code
     @transform_and_batch_module
     def get_pure_batched_nn_functions(output_dim, hidden_layer_sizes, activation):
@@ -124,13 +129,13 @@ if __name__ == "__main__":
             likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
             base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
-
             return base_learner.init_fn, BaseLearnerInterface(base_learner_fit=base_learner.fit,
                                                               base_learner_predict=base_learner.pred_dist,
                                                               base_learner_mll_estimator=base_learner.marginal_ll)
         return factory
 
     print("TESTING transform and batch")
+
     rds = jax.random.PRNGKey(42)
     batch_size_vi = 3
     init_batched, batched_forward, batched_forward_batch_inputs = get_pure_batched_nn_functions(1, (32, 32), jax.nn.elu)
@@ -148,6 +153,9 @@ if __name__ == "__main__":
     outs2 = batched_forward_batch_inputs(all_params, init_keys, xs2)
     print("1to1", outs2)
 
+    xslarge = jnp.array([[1], [2], [3], [4]])
+    yslarge = jnp.array([3, 4, 5, 6])
+
 
     print("TESTING multi tranform and batch with state ")
     gpinit, gpapplys, gpapplys_batched = batched_pacoh_gp_map_forward(1)
@@ -161,8 +169,12 @@ if __name__ == "__main__":
     print("It's very nice, because I get the output of 3 gps here: PRIOR\n", output.loc)
     output, state = gpapplys.base_learner_mll_estimator(params, state, init_keys, xs1, ys1)
     print("MLLestimator", output)
-    # output, state = gpapplys.base_learner_fit(params, state, init_keys, xs1, ys1)
+    output, state = gpapplys.base_learner_fit(params, state, init_keys, xs1, ys1)
     output, state = gpapplys.base_learner_predict(params, state, init_keys, xs1)
+    print("fitting a second time")
+    output, state = gpapplys.base_learner_fit(params, state, init_keys, xslarge, yslarge)
+    output, state = gpapplys.base_learner_predict(params, state, init_keys, xslarge)
+
     print("It's very nice, because I get the output of 3 gps here: POSTERIOR\n", output.loc)
 
 
