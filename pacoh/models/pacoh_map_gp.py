@@ -11,7 +11,6 @@ import optax
 import torch
 from absl import logging
 from jax import numpy as jnp
-from jax.lax.linalg import cholesky
 
 from pacoh.modules.abstract import RegressionModelMetaLearned
 from pacoh.modules.data_handling import Statistics
@@ -156,8 +155,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             base_learner_mll_estimator=jax.jit(self._apply_fns.base_learner_mll_estimator)
         )
 
-        mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
-        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=mask_fn)
+        # mask weight decay for log_scale parameters
+        self.mask_fn = functools.partial(hk.data_structures.map, lambda _, name, __: name != '__positive_log_scale_param')
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=self.mask_fn)
         self.prior_params: hk.Params
         self.opt_state: optax.OptState
 
@@ -183,6 +183,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             lls, states = batched_losses_and_states(*args)
             return jnp.sum(lls), states
 
+
+
         # auto differentiation and jit compilation
         batched_mll_value_and_grad = jax.value_and_grad(cumulative_loss, has_aux=True)
         batched_mll_value_and_grad = jax.jit(batched_mll_value_and_grad)
@@ -203,6 +205,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             # b) get value and gradient
             output, gradients = batched_mll_value_and_grad(self.params, batched_states, apply_rngs, batched_xs, batched_ys)
             loss, states = output  # we don't actually need the states
+
+            # gradients = hk.data_structures.map(lambda _,__,x: 0.0, gradients) # zerograd
 
             # c) compute and apply optimizer updates
             updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
@@ -330,6 +334,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             self.params, self.empty_state = self._init_fn(init_rng, meta_train_tuples[0][0]) # prior parameters, initial state
             self.opt_state = self.optimizer.init(self.params)  # optimizer on the prior params
 
+
+
         task_dicts = []
 
         for xs,ys in meta_train_tuples:
@@ -352,7 +358,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
 if __name__ == "__main__":
     from jax.config import config
-    config.update("jax_debug_nans", True)
+    config.update("jax_debug_nans", False)
     config.update('jax_disable_jit', False)
 
     from experiments.data_sim import SinusoidDataset
@@ -380,15 +386,14 @@ if __name__ == "__main__":
 
     for weight_decay in [1.0]:
         pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
-                                covar_module='SE', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
+                                covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            n_iter = 300
-            warnings.warn("change back n_iter")
+            n_iter = 2000
             pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 
             itrs += n_iter

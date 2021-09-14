@@ -1,5 +1,6 @@
 import functools
 
+import jax.lax.linalg
 import numpyro.distributions
 from abc import ABC, abstractmethod
 from jax import numpy as jnp, vmap
@@ -102,14 +103,14 @@ class JAXExactGP:
     """ ---- training utilities ---- """
     def marginal_ll(self, xs, ys):
         # computes the marginal log-likelihood of ys given xs and a posterior
-        # computed on (xs,ys). This is differentiable and uses no state
+        # computed on (xs,ys). This is differentiable and uses no stats
         ys_centered = self._ys_centered(xs, ys)
-        data_cov_w_noise = self._data_cov_with_noise(xs)
+        data_cov_w_noise = self._data_cov_with_noise(xs)  # more noise
         cholesky = cho_factor(data_cov_w_noise)
-        solved = cho_solve(cholesky, ys_centered)
-        ll = -0.5 * jnp.dot(ys_centered, solved)
-        ll += -0.5 * jnp.linalg.slogdet(data_cov_w_noise)[1]
-        ll -= xs.shape[0] / 2 * jnp.log(2 * jnp.pi)
+        alpha = cho_solve(cholesky, ys_centered)
+        ll = -0.5 * jnp.dot(ys_centered, alpha)
+        ll -= jnp.sum(jnp.diag(cholesky[0]))  # this should be faster than trace
+        ll -= xs.shape[0] / 2.0 * jnp.log(2.0 * jnp.pi)
         return ll
 
 class JAXMean(hk.Module):
@@ -129,7 +130,7 @@ class JAXConstantMean(JAXMean):
 
     def __call__(self, x):
         # works for both batch or unbatched
-        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float64,
+        mean = hk.get_parameter("mu", shape=[], dtype=jnp.float32,
                                 init=hk.initializers.Constant(self.init_constant))
         return jnp.ones(x.shape, dtype=jnp.float64) * mean
 
