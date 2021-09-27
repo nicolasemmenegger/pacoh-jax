@@ -136,6 +136,9 @@ def pytrees_stack(pytrees, axis=0):
         lambda *values: jax.numpy.stack(values, axis=axis), *pytrees)
     return results
 
+def pytrees_unstack(pytree):
+    raise NotImplementedError
+
 
 """ ------ Lightweight mltiprocessing utilities ------ """
 from multiprocessing import Process

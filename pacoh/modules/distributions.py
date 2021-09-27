@@ -48,3 +48,6 @@ class JAXGaussianLikelihood(hk.Module):
     def __call__(self, posterior):
         scale = jnp.sqrt(posterior.scale**2 + self.variance())
         return Normal(loc=posterior.loc, scale=scale)
+
+    def log_prob(self, xs, ys):
+        raise NotImplementedError

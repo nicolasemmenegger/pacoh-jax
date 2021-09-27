@@ -73,9 +73,6 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
     batched_init = vmap(init_fn, in_axes=(0, None))
     base_in_axes = (0, 0, 0) if with_state else (0, 0)
 
-    print(data_in_axes_batched)
-    print(data_in_axes)
-
     if not multi:
         # there is only one apply function
         apply_batched = vmap(apply_fns, in_axes=base_in_axes + data_in_axes)
