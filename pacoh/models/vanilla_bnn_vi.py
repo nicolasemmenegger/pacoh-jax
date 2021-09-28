@@ -3,6 +3,8 @@ import warnings
 from typing import NamedTuple, Any
 
 import jax
+import numpyro.distributions
+import optax
 import tensorflow as tf
 import haiku as hk
 
@@ -25,6 +27,7 @@ def get_pure_batched_nn_functions(output_dim, hidden_layer_sizes, activation):
 class LikelihoodInterface(NamedTuple):
     log_prob: Any
     add_noise: Any
+    get_posterior_from_means: Any
 
 @functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'add_noise': 1})
 def get_pure_batched_likelihood_functions():
@@ -35,17 +38,37 @@ def get_pure_batched_likelihood_functions():
         def log_prob(xs, ys):
             return likelihood.log_prob(xs, ys)
 
-        def add_noise(pred_f):
+        def add_noise(pred_f): # add noise to a predictive distribution
             return likelihood(pred_f)
 
-        return add_noise, LikelihoodInterface(log_prob=log_prob, add_noise=add_noise)
+        def get_posterior_from_means(ys_pred): # add noise to a mean prediction (same as add_noise with a zero_variance_pred_f)
+            return likelihood.get_posterior_from_means(ys_pred)
+
+        return add_noise, LikelihoodInterface(log_prob=log_prob, add_noise=add_noise, get_posterior_from_means=get_posterior_from_means)
 
     return factory
 
-def get_prior_function_like(pytree):
-    # returns a prior or posterior
-    pass
 
+def sample_gaussian_tree(mean_tree, std_tree, key, n_samples):
+    num_params = len(jax.tree_util.leaves(mean_tree)) # number of prng keys we need
+    key, *keys = jax.random.split(key, num_params+1) # generate some key leaves
+    keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(mean_tree), keys) # build tree structure with keys
+
+    def sample_leaf(mean, std, key):
+        mean = jnp.expand_dims(mean, -1)
+        std = jnp.expand_dims(std, -1)
+
+        return mean + jax.random.normal(key, (n_samples, *mean.shape), dtype=jnp.float32) * std
+
+    return jax.tree_multimap(sample_leaf, mean_tree, std_tree, keys_tree)
+
+
+def broadcast_params(tree):
+    return jax.tree_map(functools.partial(jnp.repeat, axis=0), tree)
+
+
+def logprob(posterior_params, sampled_nn_params, sampled_lh_params):
+    raise NotImplementedError
 
 
 class BayesianNeuralNetworkVI(RegressionModel):
@@ -84,144 +107,160 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._rds = keys[0]
         init_keys = keys[1:]
         batched_nn_init_fn, self.batched_nn_apply_fn, _ = get_pure_batched_nn_functions(output_dim,
-                                                                                             hidden_layer_sizes,
-                                                                                             activation)
-
-        # note that some of this is not strictly necessary => we don't really need to initialize parameters, as we will
-        # be sampling them anyways. TODO think about if we can ditch this alltoghether
-        # TODO is the hk.nets.MLP already supporting batched xs?
-
+                                                                                        hidden_layer_sizes,
+                                                                                        activation)
         dummy_input = jnp.zeros((self.batch_size_vi, self.batch_size, input_dim))
         dummy_params = batched_nn_init_fn(init_keys, dummy_input)
         dummy_single_param = pytrees_unstack(dummy_params)[0] # just care about the form of the first models params
 
         """ B) Setup likelihood module """
-        batched_likelihood_init_fn, self.batched_likelihood_apply_fn = get_pure_batched_likelihood_functions()
-
-        # TODO if likelihood is not learned
+        batched_likelihood_init_fn, self.batched_likelihood_apply_fns = get_pure_batched_likelihood_functions()
         likelihood_input = jnp.zeros((self.batch_size_vi, self.batch_size, output_dim))
         likelihood_params = batched_likelihood_init_fn(init_keys, likelihood_input)
         likelihood_single_param = pytrees_unstack(likelihood_params)[0]
 
 
-        """ C) Setup prior module """
+        """ C) Setup prior and posterior module """
         # If the last 3 arguments are none, the prior is not learnable
-        if learn_likelihood:
-            prior_init, self.prior_sample = get_sampling_function_like(nn_params_like=dummy_single_param,
-                                                                           nn_params_std=prior_std,
-                                                                           lh_params_like=likelihood_single_param,
-                                                                           lh_prior_mean=likelihood_prior_mean,
-                                                                           lh_prior_std=likelihood_prior_std)
-        else:
-            prior_init, self.prior_sample = get_sampling_function_like(nn_params_like=dummy_single_param,
-                                                                            nn_params_std=prior_std)
+        nn_prior_std = jax.tree_map(lambda p: jnp.ones(p.shape)*prior_std, dummy_single_param)
+        nn_prior_mean = jax.tree_map(lambda p: jnp.zeros(p.shape), dummy_single_param)
+        lh_prior_std = jax.tree_map(lambda p: jnp.ones(p.shape) * likelihood_prior_std, likelihood_single_param)
+        lh_prior_mean = jax.tree_map(lambda p: jnp.ones(p.shape) * likelihood_prior_mean, likelihood_single_param)
 
-        # The prior parameters shouldn't change over time, so we can directly apply the params (first arguments)
-        # for convenience
-        _prior_params = prior_init(init_keys) # I think no data is needed for init
-        self.prior_sample = functools.partial(self.prior_sample, _prior_params)
+        self.prior_params = {
+            'nn_mean': nn_prior_std,
+            'nn_std': nn_prior_mean,
+            'lh_mean': lh_prior_mean,
+            'lh_std': lh_prior_std
+        }
 
+        self.posterior_params = jax.tree_map(lambda v: v.copy(), self.prior_params)
 
-        """ Setup posterior module. """
-        posterior_init, self.posterior_sample = get_sampling_function_like(nn_params_like=dummy_single_param,
-                                                                           lh_params_like=likelihood_single_param)
+        # TODO understand why Jonas initializes the prior differently for learnable and non-learnable likelihood?
+        # TODO logscale
+        """ D) Setup Posterior Module """
+        self.learn_likelihood = learn_likelihood
+        if not learn_likelihood:
+            self.posterior_params['lh_std'] = None
+            self.prior_params['lh_std'] = None
 
-
-        self._rds, init_keys = get_prng_keys(self._rds, 1)
-        self.posterior_params = posterior_init(init_keys)
-
-
-        # setup optimizer
-        warnings.warn("setup optimizer")
-        self.optim = tf.keras.optimizers.Adam(lr)
+        """ E) Setup optimizer: posterior parameters """
+        # TODO mask weight decay for log_scale parameters
+        lr_scheduler = optax.constant_schedule(lr)
+        self.optimizer = optax.adam(lr_scheduler)
+        self.optimizer_state = self.optimizer.init(self.posterior_params)
 
 
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
-        self._rds, fit_key = jax.random.split(self._rds)
-        _, self._state = self._apply_fns.fit_fn(self._params, self._state, fit_key, self.xs_data, self.ys_data)
+        # TODO ask Jonas what about recomputing the posterior -> start from scratch?  Not in an online setting I suppose
+        raise NotImplementedError
 
 
     def predict(self, xs, num_posterior_samples=20):
-        # data handling
+        # a) data handling
         xs = _handle_batch_input_dimensionality(xs)
         xs = self._normalize_data(xs)
 
-        # nn prediction
-        y_pred_batches = []
-        likelihood_std_batches = []
+        # b) nn prediction
+        self._rds, nn_key, lh_key = jax.random.split(self._rds, 3)
 
-        # TODO check that I really don't need a for loop
-        sampled_params = self.posterior_sample((num_posterior_samples,))
-        sampled_nn_params, sampled_stds = pytree_split(sampled_params)
-        ys_pred = self.batched_nn_apply_fn(sampled_nn_params, xs)
-        pred_dist = get_pred_mixture_dist(ys_pred, sampled_stds) # TODO implement
-        ys_pred = self._unnormalize_preds(y_pred)
-        pred_dist = self._unnormalize_predictive_dist(pred_dist)
+        nn_params = sample_gaussian_tree(self.posterior_params['nn_mean'], self.posterior_params['nn_std'], nn_key, num_posterior_samples)
+        ys_pred = self.batched_nn_apply_fn(nn_params, None, xs)
+
+        # c) get posterior
+        if self.learn_likelihood:
+            lh_params = sample_gaussian_tree(self.posterior_params['lh_mean'], self.posterior_params['lh_std'], lh_key, num_posterior_samples)
+        else:
+            lh_params = broadcast_params(self.posterior_params['lh_mean'])
+        pred_dists = self.batched_likelihood_apply_fns.get_posterior_from_means(lh_params, ys_pred)
+        mixture = numpyro.distributions.Categorical(probs=jnp.ones((self.batch_size_vi,))/self.batch_size_vi)
+        pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
+        # TODO affinetransformed distribution stuff
+
+        # d) data handling undo
+        ys_pred = self._unnormalize_preds(ys_pred) # should that be some kind of mean??
+        pred_dist = self._unnormalize_predictive_dist(pred_mixture)
         return ys_pred, pred_dist
 
-        # for _ in range(num_posterior_samples // self.batch_size_vi):
-        #
-        #     sampled_params = self.posterior.sample((self.batch_size_vi,))
-        #     nn_params, likelihood_std = self._split_into_nn_params_and_likelihood_std(sampled_params)
-        #     likelihood_std_batches.append(likelihood_std)
-        #     y_pred_batches.append(self.nn.call_parametrized(x, nn_params))
-        # y_pred = tf.concat(y_pred_batches, axis=0)
-        # likelihood_std = tf.concat(likelihood_std_batches, axis=0)
+    def _step(self, x_batch, y_batch):
+        def negelbo(posterior_params, x_batch, y_batch):
+            # sample from posterior
+            sampled_nn_params = sample_gaussian_tree(posterior_params['nn_mean'], posterior_params['nn_std'])
+            if self.learn_likelihood:
+                sampled_lh_params = sample_gaussian_tree(posterior_params['lh_mean'], posterior_params['lh_std'])
+            else:
+                sampled_lh_params = broadcast_params(posterior_params['lh_mean'])
 
-        # pred_dist = self.likelihood.get_pred_mixture_dist(y_pred, likelihood_std)
-
-        # unnormalize preds
-
-
-    @tf.function
-    def step(self, x_batch: tf.Tensor, y_batch: tf.Tensor) -> tf.Tensor:
-        with tf.GradientTape(watch_accessed_variables=False) as tape:
-            # keep in mind: len(trainable variables) = number of defined Variables in class and all parent classes
-            tape.watch(self.posterior.trainable_variables)
-
-            # sample batch of parameters from the posterior
-            sampled_params = self.posterior.sample((self.batch_size_vi,))
-            nn_params, likelihood_std = self._split_into_nn_params_and_likelihood_std(sampled_params)
-
-            # compute log-likelihood
-            y_pred = self.nn.call_parametrized(x_batch, nn_params)  # (batch_size_vi, batch_size, 1)
-            avg_log_likelihood = self.likelihood.log_prob(y_pred, y_batch, likelihood_std)
+            # predict and compute log-likelihood
+            ys_pred = self.batched_nn_apply_fn(sampled_nn_params, None, x_batch)
+            avg_log_likelihood = self.batched_likelihood_apply_fns.log_prob(sampled_lh_params, y_batch, ys_pred)
 
             # compute kl
-            kl_divergence = self.posterior.log_prob(sampled_params) - self.prior.log_prob(sampled_params)
-            avg_kl_divergence = tf.reduce_mean(kl_divergence) / self.num_train_samples
+            kl_divergence = logprob(posterior_params, sampled_nn_params, sampled_lh_params) \
+                          - logprob(self.prior_params, sampled_nn_params, sampled_lh_params)
+
+            avg_kl_divergence = jnp.reduce_mean(kl_divergence) / self.num_train_samples
 
             # compute elbo
-            elbo = - avg_log_likelihood + avg_kl_divergence * self.prior_weight
+            negelbo = - avg_log_likelihood + avg_kl_divergence * self.prior_weight
+            return negelbo
 
-        # compute gradient of elbo wrt posterior parameters
-        grads = tape.gradient(elbo, self.posterior.trainable_variables)
-        self.optim.apply_gradients(zip(grads, self.posterior.trainable_variables))
-        return elbo
+        nelbo, gradelbo = jax.value_and_grad(negelbo)(self.posterior_params, x_batch, y_batch)
+        updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior_params)
+        self.posterior_params = optax.apply_updates(self.posterior_params, updates)
+
+        return nelbo
+
 
 
 if __name__ == '__main__':
-    import numpy as np
+    import haiku as hk
+    from jax import numpy as jnp
+    import jax
+    class MyMod(hk.Module):
+        def fwd(self):
+            return hk.get_parameter("hi", [3], init=hk.initializers.Constant(1.2))
 
-    np.random.seed(0)
-    tf.random.set_seed(0)
+    def impure():
+        return MyMod().fwd()
 
-    d = 1  # dimensionality of the data
+    init, apply = hk.transform(impure)
+    param = init(None)
 
-    n_train = 50
-    x_train = np.random.uniform(-4, 4, size=(n_train, d))
-    y_train = np.sin(x_train) + np.random.normal(scale=0.1, size=x_train.shape)
+    flat, structure = jax.tree_flatten(param)
+    flat = flat[0]
+    print(flat)
+    n_samples = 2
+    flatsamps = [jax.random.normal(jax.random.PRNGKey(1), (flat.size, n_samples)) + jnp.expand_dims(flat, -1)]
+    sampled_params = jax.tree_util.tree_unflatten(structure, flatsamps)
 
-    n_val = 200
-    x_val = np.random.uniform(-4, 4, size=(n_val, d))
-    y_val = np.sin(x_val) + np.random.normal(scale=0.1, size=x_val.shape)
-
-    nn = BayesianNeuralNetworkVI(x_train, y_train, hidden_layer_sizes=(32, 32), prior_weight=0.001, learn_likelihood=False)
-
-    n_iter_fit = 2000
-    for i in range(10):
-        nn.fit(x_val=x_val, y_val=y_val, log_period=10, num_iter_fit=n_iter_fit)
-        if d == 1:
-            x_plot = tf.range(-8, 8, 0.1)
-            nn.plot_predictions(x_plot, iteration=(i + 1) * n_iter_fit, experiment="bnn_svgd", show=True)
+    print(structure)
+    print("")
+    print(sampled_params)
+#     import numpy as np
+#
+#     np.random.seed(0)
+#     tf.random.set_seed(0)
+#
+#     d = 1  # dimensionality of the data
+#
+#     n_train = 50
+#     x_train = np.random.uniform(-4, 4, size=(n_train, d))
+#     y_train = np.sin(x_train) + np.random.normal(scale=0.1, size=x_train.shape)
+#
+#     n_val = 200
+#     x_val = np.random.uniform(-4, 4, size=(n_val, d))
+#     y_val = np.sin(x_val) + np.random.normal(scale=0.1, size=x_val.shape)
+#
+#     nn = BayesianNeuralNetworkVI(x_train, y_train, hidden_layer_sizes=(32, 32), prior_weight=0.001, learn_likelihood=False)
+#
+#     n_iter_fit = 2000
+#     for i in range(10):
+#         nn.fit(x_val=x_val, y_val=y_val, log_period=10, num_iter_fit=n_iter_fit)
+#         if d == 1:
+#             x_plot = tf.range(-8, 8, 0.1)
+#             nn.plot_predictions(x_plot, iteration=(i + 1) * n_iter_fit, experiment="bnn_svgd", show=True)
+#
+#
+# i

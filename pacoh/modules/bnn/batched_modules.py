@@ -23,6 +23,7 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
             multi: whether we get a MultiTransformed instance
             num_data_args:  a dictionary that specifies how many data arguments each of the apply functions have.
                 The transformed.init function is curerntly constrained to be of type (keys, data)
+            # TODO implement or remove exclude: a list of names of functions that should not be batched, and returned as they are
         Returns:
             init_batched: ([keys], data) -> [params]
             apply_batched: ([params], [keys], data) -> [Any]
@@ -50,6 +51,7 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
     """batched.init returns a batch of model parameters, which is why it takes n different random keys"""
     # unpack first argument
     multi = isinstance(transformed, MultiTransformed) or isinstance(transformed, MultiTransformedWithState)
+    # assert not (!multi and len(exclude) > 0), "using the exclude argument with a single transform makes no sense and is not supported"
     with_state = isinstance(transformed, TransformedWithState) or isinstance(transformed, MultiTransformedWithState)
     init_fn, apply_fns = transformed
     if num_data_args is None:

@@ -43,6 +43,7 @@ class AffineTransformedDistribution(TransformedDistribution):
 class JAXGaussianLikelihood(hk.Module):
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0):
         super().__init__()
+        # TODO, to avoid numerical errors, I should store the std, not the variance, no
         self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
 
     def __call__(self, posterior):
@@ -51,3 +52,8 @@ class JAXGaussianLikelihood(hk.Module):
 
     def log_prob(self, xs, ys):
         raise NotImplementedError
+
+    def get_posterior_from_means(self, loc):
+        batch_size = loc.shape[0]
+        stds = jnp.repeat(jnp.sqrt(self.variance()), batch_size, axis=0)
+        return Normal(loc, scale=stds)
