@@ -1,3 +1,6 @@
+import warnings
+
+import numpyro.distributions
 from numpyro.distributions import Distribution, Normal
 from numpyro.distributions import TransformedDistribution
 from numpyro.distributions.transforms import AffineTransform
@@ -41,6 +44,7 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 
 class JAXGaussianLikelihood(hk.Module):
+    # TODO handle output dim
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0):
         super().__init__()
         # TODO, to avoid numerical errors, I should store the std, not the variance, no
@@ -50,8 +54,12 @@ class JAXGaussianLikelihood(hk.Module):
         scale = jnp.sqrt(posterior.scale**2 + self.variance())
         return Normal(loc=posterior.loc, scale=scale)
 
-    def log_prob(self, xs, ys):
-        raise NotImplementedError
+    def log_prob(self, ys_true, ys_pred):
+        scale = jnp.sqrt(self.variance())
+        ys_true
+        ys_pred
+        warnings.warn("something wrong here")
+        return Normal(scale=jnp.expand_dims(scale, 0)).log_prob(ys_true - ys_pred)
 
     def get_posterior_from_means(self, loc):
         batch_size = loc.shape[0]

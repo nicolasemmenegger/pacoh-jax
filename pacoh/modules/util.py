@@ -136,8 +136,11 @@ def pytrees_stack(pytrees, axis=0):
         lambda *values: jax.numpy.stack(values, axis=axis), *pytrees)
     return results
 
-def pytrees_unstack(pytree):
-    raise NotImplementedError
+def pytree_unstack(pytree, n=None):
+    if n is None:
+        n = jax.tree_leaves(pytree)[0].shape[0]
+
+    return [jax.tree_map(lambda x: x[i], pytree) for i in range(n)]
 
 
 """ ------ Lightweight mltiprocessing utilities ------ """
