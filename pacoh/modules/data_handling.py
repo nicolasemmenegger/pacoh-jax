@@ -1,5 +1,8 @@
+import warnings
+
 import numpy as np
 from typing import Dict, NamedTuple
+import jax
 
 from pacoh.modules.util import _handle_batch_input_dimensionality
 
@@ -68,6 +71,26 @@ class DataNormalizer:
         pass
 
 
+
+class Sampler:
+    def __init__(self, xs, ys, batch_size, rds):
+        self.num_batches = xs.shape[0] // batch_size
+        self._rds, key = jax.random.split(rds)
+        # xs, ys = jax.random.shuffle(key, xs, ys)
+        warnings.warn("shuffling not implemented actually yet")
+        self.i = -1
+        self.xs = xs
+        self.ys = ys
+        self.batch_size = batch_size
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.i = (self.i + 1) % self.num_batches
+        start = self.i * self.batch_size
+        end = start + self.batch_size
+        return self.xs[start:end], self.ys[start:end]
 
 
 
