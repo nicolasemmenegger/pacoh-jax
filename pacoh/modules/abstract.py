@@ -63,7 +63,8 @@ class RegressionModel(ABC):
         assert xs.ndim == 2 and xs.shape[1] == self.input_dim
         # handle input dimensionality and normalize data
         xs, ys = _handle_batch_input_dimensionality(xs, ys)
-        xs, ys = self._normalize_data(xs, ys)
+        #xs, ys = self._normalize_data(xs, ys)
+        warnings.warn("undo")
         # concatenate to new datapoints
         self.xs_data = np.concatenate([self.xs_data, xs])
         self.ys_data = np.concatenate([self.ys_data, ys])
