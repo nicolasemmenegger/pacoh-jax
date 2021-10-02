@@ -10,7 +10,8 @@ matplotlib~=3.4.2
 absl-py
 jax[cpu]~=0.2.20
 git+https://github.com/deepmind/dm-haiku
-numpyro~=0.7.2
+numpyro~=0.8.0
 optax~=0.0.9
 setuptools~=57.0.0
 tensorflow
+tensorflow_probability==0.14

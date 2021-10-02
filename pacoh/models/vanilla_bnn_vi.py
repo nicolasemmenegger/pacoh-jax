@@ -6,7 +6,6 @@ import jax
 import numpy as np
 import numpyro.distributions
 import optax
-# import tensorflow as tf
 import haiku as hk
 
 from jax import numpy as jnp
@@ -15,7 +14,8 @@ from tqdm import trange
 from pacoh.modules.abstract import RegressionModel
 from pacoh.modules.data_handling import Sampler
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
-from pacoh.modules.util import pytree_unstack, _handle_batch_input_dimensionality, Tree
+from pacoh.modules.util import pytree_unstack, _handle_batch_input_dimensionality, Tree, broadcast_params, pytree_shape, \
+    stack_distributions
 from pacoh.modules.bnn.batched_modules import transform_and_batch_module, multi_transform_and_batch_module
 from pacoh.modules.distributions import JAXGaussianLikelihood
 
@@ -36,14 +36,13 @@ class LikelihoodInterface(NamedTuple):
 
 @functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'get_posterior_from_means': 1})
 def get_pure_batched_likelihood_functions(likelihood_initial_std):
-    def factory():
+    def factory() -> LikelihoodInterface:
         likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std)  # TODO: non-constant variance over dimensions
 
         def log_prob(ys_true, ys_pred):
             return likelihood.log_prob(ys_true, ys_pred)
 
-        def get_posterior_from_means(
-                ys_pred):  # add noise to a mean prediction (same as add_noise with a zero_variance_pred_f)
+        def get_posterior_from_means(ys_pred):  # add noise to a mean prediction (same as add_noise with a zero_variance_pred_f)
             return likelihood.get_posterior_from_means(ys_pred)
 
         return get_posterior_from_means, LikelihoodInterface(log_prob=log_prob,
@@ -52,19 +51,19 @@ def get_pure_batched_likelihood_functions(likelihood_initial_std):
     return factory
 
 
-def sample_gaussian_tree(mean_tree, std_tree, key, n_samples):
-    num_params = len(jax.tree_util.tree_leaves(mean_tree))  # number of prng keys we need
-    key, *keys = jax.random.split(key, num_params + 1)  # generate some key leaves
-    keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(mean_tree),
-                                             keys)  # build tree structure with keys
-
-    def sample_leaf(mean, std, key):
-        mean = jnp.expand_dims(mean, -1)
-        std = jnp.expand_dims(std, -1)
-
-        return (mean + jax.random.normal(key, (n_samples, *mean.shape), dtype=jnp.float32) * std).squeeze(axis=-1)
-
-    return jax.tree_multimap(sample_leaf, mean_tree, std_tree, keys_tree)
+# def sample_gaussian_tree(mean_tree, std_tree, key, n_samples):
+#     num_params = len(jax.tree_util.tree_leaves(mean_tree))  # number of prng keys we need
+#     key, *keys = jax.random.split(key, num_params + 1)  # generate some key leaves
+#     keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(mean_tree),
+#                                              keys)  # build tree structure with keys
+#
+#     def sample_leaf(mean, std, key):
+#         mean = jnp.expand_dims(mean, -1)
+#         std = jnp.expand_dims(std, -1)
+#
+#         return (mean + jax.random.normal(key, (n_samples, *mean.shape), dtype=jnp.float32) * std).squeeze(axis=-1)
+#
+#     return jax.tree_multimap(sample_leaf, mean_tree, std_tree, keys_tree)
 
 
 # def log_prob_params(posterior_params, sampled_nn_params, sampled_lh_params=None):
@@ -137,6 +136,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
     return - avg_log_likelihood + avg_kl_divergence * prior_weight
 
 
+
 class BayesianNeuralNetworkVI(RegressionModel):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
                  random_state: jax.random.PRNGKey = None,
@@ -183,7 +183,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         nn_params = batched_nn_init_fn(init_keys, nn_input)
         nn_param_template = pytree_unstack(nn_params)[0]  # just care about the form of the first models params
 
-        likelihood_input = jnp.zeros((self.batch_size_vi, self.batch_size, output_dim))
+        likelihood_input = jnp.zeros((self.batch_size_vi, output_dim))
         likelihood_params = batched_likelihood_init_fn(init_keys, likelihood_input)
         likelihood_param_template = pytree_unstack(likelihood_params)[0]
 
@@ -276,29 +276,38 @@ class BayesianNeuralNetworkVI(RegressionModel):
         # xs = self._normalize_data(xs)
 
         # b) nn prediction
-        self._rds, key = jax.random.split(self._rds)
+        self._rds, nn_key, lh_key = jax.random.split(self._rds, 3)
 
-        nn_params = GaussianBelief.rsample(self.posterior['nn'], key, num_posterior_samples)
-        # nn_params = sample_gaussian_tree(self.posterior_params['nn_mean'], self.posterior_params['nn_std'], nn_key, num_posterior_samples)
+        nn_params = GaussianBelief.rsample(self.posterior['nn'], nn_key, num_posterior_samples)
+        nn_shape = pytree_shape(nn_params)
+
+
         ys_pred = self.batched_nn(nn_params, None, xs)
+        mean_shape = ys_pred.shape
 
-        return jnp.mean(ys_pred, axis=0)
-
-        # c) get posterior
         if self.learn_likelihood:
-            lh_params = sample_gaussian_tree(self.posterior_params['lh_mean'], self.posterior_params['lh_std'], lh_key,
-                                             num_posterior_samples)
+            lh_params = GaussianBelief.rsample(self.posterior['lh'], lh_key, num_posterior_samples)
         else:
-            lh_params = broadcast_paramds(self.posterior_params['lh_mean'], num_posterior_samples)
-        pred_dists = self.batched_likelihood_apply_fns.get_posterior_from_means(lh_params, ys_pred)
-        mixture = numpyro.distributions.Categorical(probs=jnp.ones((self.batch_size_vi,)) / self.batch_size_vi)
-        pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
-        # TODO affinetransformed distribution stuff
+            # lh_params = self.fixed_likelihood_params # there are not enough here
+            lh_params = broadcast_params(pytree_unstack(self.fixed_likelihood_params, 1)[0], num_posterior_samples)
 
-        # d) data handling undo
-        ys_pred = self._unnormalize_preds(ys_pred)  # should that be some kind of mean??
-        pred_dist = self._unnormalize_predictive_dist(pred_mixture)
-        return ys_pred, pred_dist
+        lh_shape = pytree_shape(lh_params)
+
+        pred_dists = self.batched_likelihood_apply_fns_batch_inputs.get_posterior_from_means(lh_params, None, ys_pred)
+        # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
+        pred_dists = stack_distributions(pred_dists)
+
+        mixture = numpyro.distributions.Categorical(probs=jnp.ones((num_posterior_samples,)) / num_posterior_samples)
+
+
+        pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
+
+        # TODO handle
+        #ys_pred = self._unnormalize_preds(ys_pred)  # should that be some kind of mean??
+        #pred_dist = self._unnormalize_predictive_dist(pred_mixture)
+
+        return jnp.mean(ys_pred, axis=0), pred_mixture
+
 
     def _step(self, x_batch, y_batch):
         self._rds, step_key = jax.random.split(self._rds)
@@ -332,10 +341,15 @@ if __name__ == '__main__':
         nn.fit(x_val=x_val, y_val=y_val, log_period=10, num_iter_fit=n_iter_fit)
         from matplotlib import pyplot as plt
 
-        plt.scatter(x_val, y_val)
-        pred = nn.predict(x_val)
 
-        plt.plot(x_val, pred)
+        pred, pred_mixture = nn.predict(x_val)
+
+        plt.plot(x_val, pred_mixture.mean)
+        ucb = pred + pred_mixture.variance
+        lcb = pred - pred_mixture.variance
+        plt.fill_between(x_val.flatten(), lcb.flatten(), ucb.flatten())
+        plt.scatter(x_train, y_train)
+
         plt.show()
 
 # if __name__ == '__main__':

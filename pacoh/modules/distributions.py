@@ -62,5 +62,8 @@ class JAXGaussianLikelihood(hk.Module):
 
     def get_posterior_from_means(self, loc):
         batch_size = loc.shape[0]
-        stds = jnp.repeat(jnp.sqrt(self.variance()), batch_size, axis=0)
+        var = self.variance()
+        #stds = jnp.expand_dims(jnp.repeat(jnp.sqrt(self.variance()), batch_size, axis=0), -1)
+        stds = jnp.expand_dims(jnp.repeat(jnp.sqrt(0.01), batch_size, axis=0), -1)
         return Normal(loc, scale=stds)
+

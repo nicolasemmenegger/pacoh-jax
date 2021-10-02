@@ -7,7 +7,7 @@ from pacoh_nn.modules.likelihood import GaussianLikelihood
 
 
 class BayesianNeuralNetworkVI(RegressionModel):
-
+    
     def __init__(self, x_train, y_train, hidden_layer_sizes=(32, 32), activation='elu',
                  likelihood_std=0.1, learn_likelihood=True, prior_std=1.0, prior_weight=0.1,
                  likelihood_prior_mean=tf.math.log(0.1), likelihood_prior_std=1.0,

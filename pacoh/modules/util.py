@@ -4,6 +4,8 @@ import jax
 import numpy as np
 import os
 import logging
+
+import numpyro.distributions
 from absl import flags
 import warnings
 import torch
@@ -79,3 +81,17 @@ def pytree_unstack(pytree: Tree, n=None):
 
 def broadcast_params(tree: Tree, num_repeats):
     return jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), repeats=num_repeats, axis=0), tree)
+
+
+def pytree_shape(tree: Tree):
+    return jax.tree_map(lambda p: p.shape, tree)
+
+""" ----- Distribution Transformations ------ """
+def stack_distributions(distribution: numpyro.distributions.Normal):
+    """ Takes a Normal Distribution with batch_shape (n_particles, *dims) and returns one of (*dims, n_particles) """
+    loc = distribution.loc
+    scale = distribution.scale
+
+    loc = jnp.stack(loc, axis=-1)
+    scale = jnp.stack(scale, axis=-1)
+    return numpyro.distributions.Normal(scale=scale, loc=loc)
