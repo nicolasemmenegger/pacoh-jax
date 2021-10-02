@@ -66,22 +66,6 @@ def get_pure_batched_likelihood_functions(likelihood_initial_std):
 #     return jax.tree_multimap(sample_leaf, mean_tree, std_tree, keys_tree)
 
 
-# def log_prob_params(posterior_params, sampled_nn_params, sampled_lh_params=None):
-#     # TODO ask Charlotte how she handles such things
-#     nn_means = jax.tree_leaves(posterior_params['nn_mean'])
-#     nn_stds = jax.tree_leaves(posterior_params['nn_std'])
-#     nn_samples = jax.tree_leaves(sampled_nn_params)
-#
-#     total = 0.0
-#     for mean, std, param in zip(nn_means, nn_stds, nn_samples):
-#         # TODO check if correct
-#         total += jnp.mean(numpyro.distributions.Normal(loc=mean, scale=std).log_prob(param))
-#
-#     if sampled_lh_params is not None:  # if we are learning the likelihood
-#         raise NotImplementedError
-#
-#     return total
-
 def neg_elbo(posterior: Dict[str, GaussianBeliefState],
              key: jax.random.PRNGKey,
              x_batch: jnp.array,

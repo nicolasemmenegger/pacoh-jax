@@ -6,7 +6,7 @@ import numpyro.distributions
 
 from pacoh.modules import JAXExactGP, JAXConstantMean
 from pacoh.modules.gp.kernels import JAXRBFKernel
-from pacoh.modules import AffineTransformedDistribution, JAXGaussianLikelihood
+from pacoh.modules.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
 from pacoh.modules.abstract import RegressionModel
 from pacoh.modules.util import _handle_batch_input_dimensionality
 from typing import Dict, NamedTuple, Any

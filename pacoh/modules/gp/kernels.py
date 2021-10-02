@@ -59,7 +59,6 @@ class JAXRBFKernelNN(JAXKernel):
                                               name="LengthScale")
 
         self.nn_ftr_map = hk.nets.MLP(output_sizes=(1,), activation=lambda x: x)
-        self.dummy_param = hk.get_parameter("stupid", dtype=jnp.float32, shape=[], init=hk.initializers.Constant(0.0))
 
     def __call__(self, x1, x2=None):
         x1 = self.nn_ftr_map(x1)

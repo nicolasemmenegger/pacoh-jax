@@ -45,9 +45,10 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 class JAXGaussianLikelihood(hk.Module):
     # TODO handle output dim => no need for expand_dims below
-    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0):
+    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1):
         super().__init__()
         # TODO, to avoid numerical errors, I should store the std, not the variance, no
+        variance = jnp.ones((output_dim,))*variance
         self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
 
     def __call__(self, posterior):
@@ -63,7 +64,6 @@ class JAXGaussianLikelihood(hk.Module):
     def get_posterior_from_means(self, loc):
         batch_size = loc.shape[0]
         var = self.variance()
-        #stds = jnp.expand_dims(jnp.repeat(jnp.sqrt(self.variance()), batch_size, axis=0), -1)
-        stds = jnp.expand_dims(jnp.repeat(jnp.sqrt(0.01), batch_size, axis=0), -1)
+        stds = jnp.broadcast_to(jnp.sqrt(var), (batch_size, *var.shape))
         return Normal(loc, scale=stds)
 
