@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 from typing import Dict, NamedTuple
 import jax
+from jax import numpy as jnp
 
 from pacoh.modules.util import _handle_batch_input_dimensionality
 
@@ -76,11 +77,12 @@ class Sampler:
     def __init__(self, xs, ys, batch_size, rds):
         self.num_batches = xs.shape[0] // batch_size
         self._rds, key = jax.random.split(rds)
-        # xs, ys = jax.random.shuffle(key, xs, ys)
-        warnings.warn("shuffling not implemented actually yet")
+
+        ids = jnp.arange(xs.shape[0])
+        perm = jax.random.permutation(key, ids)
         self.i = -1
-        self.xs = xs
-        self.ys = ys
+        self.xs = xs[perm]
+        self.ys = ys[perm]
         self.batch_size = batch_size
 
     def __iter__(self):

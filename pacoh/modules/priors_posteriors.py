@@ -1,15 +1,10 @@
 import functools
 import typing
-import warnings
-from collections import namedtuple
-from typing import NamedTuple, Any
 
 import jax
 import numpyro
 from jax import numpy as jnp
 
-
-# @jax.tree_util.register_pytree_node_class
 from pacoh.modules.util import Tree, pytree_sum
 
 
@@ -67,7 +62,10 @@ class GaussianBelief:
         """
         :param parameters: (mean, std) tree structure
         :param key: jax.random.PRNGKey
-        :return: num_samples
+        :param: num_samples. The number of samples to draw for each leaf
+
+        :return: A tree of the same shape as the GaussianBeliefState, except that each leaf gets expanded in the first
+        dimension, which now corresponds to the number of samples
         """
 
         # get a tree of keys of the same shape as the mean and std tree, albeit not with same leaf shape (only need
@@ -89,34 +87,15 @@ class GaussianBelief:
 
     @staticmethod
     def log_prob(parameters: GaussianBeliefState, samples: Tree):
-        """This is static, because we need to differentiate through it"""
-        def weighted_probs(mean, std, sample):
+        """
+        Computes the log_probablity of a bunch of sampled parameters.
+        Returns an array of size num_samples, each entry containing the log probablitiy of one sampled model
+        """
+        def leaf_log_prob(mean, std, sample):
             # assumes that params is a pytree of mean std and already stacked
-            warnings.warn("check dimensions")
-            # TODO there is something with the event shape that is not quite right
-            res = numpyro.distributions.Normal(loc=mean, scale=std).log_prob(sample)
-            res =  mean.size * res
-            return res
-            # check the form of this
+            res = numpyro.distributions.Normal(loc=mean, scale=std).log_prob(sample) # (num_samples, *mean.shape)
+            return jnp.sum(res, axis=tuple(range(1, res.ndim)))  # this sums up along the sample size direction
 
-        size_tree = pytree_sum(jax.tree_map(lambda par: par.size, samples))
-        total_params = jax.tree_util.tree_reduce(lambda s, x: s + x, size_tree, 0.0)
+        sum = pytree_sum(jax.tree_multimap(leaf_log_prob, parameters.mean, parameters.std, samples))
 
-        weighted_probs_tree = jax.tree_multimap(weighted_probs, parameters.mean, parameters.std, samples)
-        return pytree_sum(weighted_probs_tree) / total_params
-
-
-        # def log_prob_params(posterior_params, sampled_nn_params, sampled_lh_params=None):
-        #     nn_means = jax.tree_leaves(posterior_params['nn_mean'])
-        #     nn_stds = jax.tree_leaves(posterior_params['nn_std'])
-        #     nn_samples = jax.tree_leaves(sampled_nn_params)
-        #
-        #     total = 0.0
-        #     for mean, std, param in zip(nn_means, nn_stds, nn_samples):
-        #         # TODO check if correct
-        #         total += jnp.mean(numpyro.distributions.Normal(loc=mean, scale=std).log_prob(param))
-        #
-        #     if sampled_lh_params is not None:  # if we are learning the likelihood
-        #         raise NotImplementedError
-        #
-        #     return total
+        return sum

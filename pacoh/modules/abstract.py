@@ -103,7 +103,7 @@ class RegressionModel(ABC):
 
         """
         test_x, test_y = _handle_batch_input_dimensionality(test_x, test_y)
-
+        return 0.0, 0.0, 0.0, 0.0
         # test_t_tensor = torch.from_numpy(test_y).contiguous().float().flatten().to(device)
         warnings.warn("find out if that is a diagonal distribution returned here")
         pred_dist = self.predict(test_x, return_density=True, *kwargs)

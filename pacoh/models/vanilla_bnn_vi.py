@@ -37,7 +37,7 @@ class LikelihoodInterface(NamedTuple):
 @functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'get_posterior_from_means': 1})
 def get_pure_batched_likelihood_functions(likelihood_initial_std):
     def factory() -> LikelihoodInterface:
-        likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std)  # TODO: non-constant variance over dimensions
+        likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std)
 
         def log_prob(ys_true, ys_pred):
             return likelihood.log_prob(ys_true, ys_pred)
@@ -73,6 +73,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
              prior: Dict[str, GaussianBeliefState],
              prior_weight: float,
              batch_size_vi: int,
+             num_train_points: int,
              nn_apply: Callable[[Tree, jax.random.PRNGKey, jnp.array], jnp.array],
              likelihood_applys: LikelihoodInterface,
              learn_likelihood: bool,
@@ -85,6 +86,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
     :param prior: dict of GaussianBeliefState
     :param prior_weight: how heavy to weight the kl term between prior and posterior
     :param batch_size_vi: how many samples to use for approximating the elbo expectation
+    :param num_train_samples: the total number of train_samples (TODO this could be handled via the prior weight part)
     :param nn_apply: the pure nn forward function
     :param likelihood_applys: the pure likelihood functions
     :param learn_likelihood: whether to use
@@ -105,19 +107,23 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
     ys_true_rep = jnp.repeat(jnp.expand_dims(y_batch, axis=0), batch_size_vi, axis=0)
 
     # data log likelihood
-    log_likelihoods = likelihood_applys.log_prob(lh_params_batch, None, ys_true_rep, ys_pred)
-    avg_log_likelihood = jnp.mean(log_likelihoods)
+    log_likelihoods = likelihood_applys.log_prob(lh_params_batch, None, ys_true_rep, ys_pred) # (batch_size_vi, batch_size, output_dimension)
+    avg_log_likelihood = jnp.mean(log_likelihoods)  # this is the average log likelihood on
 
     # kl computation (regularization)
-    avg_kl_divergence = GaussianBelief.log_prob(posterior['nn'], nn_params_batch) \
-                        - GaussianBelief.log_prob(prior['nn'], nn_params_batch)
+    kl_divergence = GaussianBelief.log_prob(posterior['nn'], nn_params_batch) \
+                    - GaussianBelief.log_prob(prior['nn'], nn_params_batch) #  (batch_size_vi,)
+
+    avg_kl_divergence = jnp.mean(kl_divergence)
 
     if learn_likelihood:
-        avg_kl_divergence = GaussianBelief.log_prob(posterior['lh'], lh_params_batch) \
+        kl_divergence_lh = GaussianBelief.log_prob(posterior['lh'], lh_params_batch) \
                             - GaussianBelief.log_prob(prior['lh'], lh_params_batch)
 
+        avg_kl_divergence += jnp.mean(kl_divergence_lh)
+
     # result computation
-    return - avg_log_likelihood + avg_kl_divergence * prior_weight
+    return -avg_log_likelihood + (prior_weight / num_train_points) * avg_kl_divergence
 
 
 
@@ -199,6 +205,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         """ E) Setup pure objective function """
 
+        print("ThE NUMBER OF TRAINING POINTS IS", self._num_train_points)
+        print(self.prior_weight)
         elbo_fn = functools.partial(neg_elbo,
                                     prior=self.prior,
                                     prior_weight=self.prior_weight,
@@ -208,8 +216,9 @@ class BayesianNeuralNetworkVI(RegressionModel):
                                     learn_likelihood=self.learn_likelihood,
                                     fixed_likelihood_params=self.fixed_likelihood_params)
 
-        self.elbo_val_and_grad = jax.jit(jax.value_and_grad(elbo_fn))
+        self.elbo_fn = elbo_fn
 
+        self.elbo_val_and_grad = jax.jit(jax.value_and_grad(elbo_fn))
         self.batched_nn = jax.jit(self.batched_nn_apply_fn)
 
     def _recompute_posterior(self):
@@ -229,14 +238,14 @@ class BayesianNeuralNetworkVI(RegressionModel):
             loss = self._step(x_batch, jnp.expand_dims(y_batch, axis=-1))
             loss_list.append(loss)
 
-            # if i % log_period == 0:
-            #     loss = tf.reduce_mean(tf.convert_to_tensor(loss_list)).numpy()
-            #     loss_list = []
-            #     message = dict(loss=loss)
-            #     if x_val is not None and y_val is not None:
-            #         metric_dict = self.eval(x_val, y_val)
-            #         message.update(metric_dict)
-            #     pbar.set_postfix(message)
+            if i % log_period == 0:
+                loss = jnp.mean(jnp.array(loss_list))
+                loss_list = []
+                message = dict(loss=loss)
+                # if x_val is not None and y_val is not None:
+                #     metric_dict = self.eval(x_val, y_val)
+                #     message.update(metric_dict)
+                pbar.set_postfix(message)
 
     def _get_batch_sampler(self, xs, ys, batch_size):
         # iterator that shuffles and repeats the data
@@ -281,8 +290,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
         # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
         pred_dists = stack_distributions(pred_dists)
 
-        mixture = numpyro.distributions.Categorical(probs=jnp.ones((num_posterior_samples,)) / num_posterior_samples)
 
+        mixture = numpyro.distributions.Categorical(probs=jnp.ones((num_posterior_samples,)) / num_posterior_samples)
 
         pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
 
@@ -295,14 +304,14 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
     def _step(self, x_batch, y_batch):
         self._rds, step_key = jax.random.split(self._rds)
-        nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch)
+        nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
 
 
 if __name__ == '__main__':
-    np.random.seed(0)
+    np.random.seed(1)
 
     d = 1  # dimensionality of the data
 
@@ -312,26 +321,25 @@ if __name__ == '__main__':
 
     n_val = 200
 
-    x_val = np.linspace(-4, 4, num=n_val)
-    x_val = np.expand_dims(x_val, -1)
-    y_val = np.sin(x_val) + np.random.normal(scale=0.1, size=x_val.shape)
+    x_plot = np.linspace(-8, 8, num=n_val)
+    x_plot = np.expand_dims(x_plot, -1)
+    y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
     nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, hidden_layer_sizes=(32, 32), prior_weight=0.001,
-                                 learn_likelihood=False)
+                                 learn_likelihood=True)
     nn.add_data_points(x_train, y_train)
 
     n_iter_fit = 2000  # 2000
     for i in range(10):
-        nn.fit(x_val=x_val, y_val=y_val, log_period=10, num_iter_fit=n_iter_fit)
+        nn.fit(log_period=10, num_iter_fit=n_iter_fit)
         from matplotlib import pyplot as plt
 
+        pred, pred_mixture = nn.predict(x_plot)
 
-        pred, pred_mixture = nn.predict(x_val)
-
-        plt.plot(x_val, pred_mixture.mean)
         ucb = pred + pred_mixture.variance
         lcb = pred - pred_mixture.variance
-        plt.fill_between(x_val.flatten(), lcb.flatten(), ucb.flatten())
+        plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
+        plt.plot(x_plot, pred_mixture.mean)
         plt.scatter(x_train, y_train)
 
         plt.show()

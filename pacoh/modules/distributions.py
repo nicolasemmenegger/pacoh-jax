@@ -44,7 +44,6 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 
 class JAXGaussianLikelihood(hk.Module):
-    # TODO handle output dim => no need for expand_dims below
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1):
         super().__init__()
         # TODO, to avoid numerical errors, I should store the std, not the variance, no
@@ -57,8 +56,7 @@ class JAXGaussianLikelihood(hk.Module):
 
     def log_prob(self, ys_true, ys_pred):
         scale = jnp.sqrt(self.variance())
-        scale = jnp.expand_dims(scale, 0)
-        logprob = Normal(scale=scale).log_prob(ys_true - ys_pred)
+        logprob = Normal(scale=scale).log_prob(ys_true - ys_pred) # log likelihood of the data under the modeled variance
         return logprob
 
     def get_posterior_from_means(self, loc):

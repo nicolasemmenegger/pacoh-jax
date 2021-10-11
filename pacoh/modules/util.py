@@ -82,11 +82,11 @@ def pytree_unstack(pytree: Tree, n=None):
 def broadcast_params(tree: Tree, num_repeats):
     return jax.tree_map(lambda x: jnp.repeat(jnp.expand_dims(x, 0), repeats=num_repeats, axis=0), tree)
 
-
 def pytree_shape(tree: Tree):
     return jax.tree_map(lambda p: p.shape, tree)
 
 def pytree_sum(tree: Tree):
+    tree =  tree
     return jax.tree_util.tree_reduce(lambda x, s: x+s, tree, 0.0)
 
 """ ----- Distribution Transformations ------ """
