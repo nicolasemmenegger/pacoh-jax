@@ -306,6 +306,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._rds, step_key = jax.random.split(self._rds)
         nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
+        self.optimizer_state = new_opt_state # WARNING this was wrong before
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
 
