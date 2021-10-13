@@ -1,11 +1,11 @@
-import functools
 import typing
+from functools import partial
 
 import jax
 import numpyro
 from jax import numpy as jnp
 
-from pacoh.modules.util import Tree, pytree_sum
+from pacoh.util.tree import Tree, pytree_sum
 
 
 class GaussianBeliefState(typing.NamedTuple):
@@ -48,7 +48,6 @@ class GaussianBeliefState(typing.NamedTuple):
         return jax.tree_map(jnp.exp, self.log_std)
 
     def copy(self):
-        return self
         mean = jax.tree_map(jnp.copy, self.mean)
         std = jax.tree_map(jnp.copy, self.std)
         return GaussianBeliefState(mean, std)
@@ -84,6 +83,17 @@ class GaussianBelief:
             return sample
 
         return jax.tree_multimap(sample_leaf, parameters.mean, parameters.log_std, keys_tree)
+
+    @staticmethod
+    def rsample_multiple(parameters: Tree, key: jax.random.PRNGKey, num_samples: int):
+        """
+        samples according to a tree of Gaussianbeliefstates
+        """
+        flattened, treedef = jax.tree_util.tree_flatten(parameters.mean, lambda p: isinstance(p, GaussianBeliefState))
+        keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(parameters.mean),
+                                                 jax.random.split(key, len(flattened))) # keys tree corresponding to the structure of the top_level tree of BeliefStates
+        return jax.tree_multimap(partial(GaussianBelief.rsample, num_samples=num_samples), parameters, keys_tree,
+                                 is_leaf=lambda p, _: isinstance(p, GaussianBeliefState))
 
     @staticmethod
     def log_prob(parameters: GaussianBeliefState, samples: Tree):

@@ -2,7 +2,7 @@ import warnings
 from typing import Union
 
 import numpy as np
-from pacoh.modules.util import _handle_batch_input_dimensionality, _handle_point_input_dimensionality
+from pacoh.util.data_handling import _handle_batch_input_dimensionality, _handle_point_input_dimensionality
 from config import device
 
 import jax

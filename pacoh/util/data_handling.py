@@ -1,11 +1,7 @@
-import warnings
-
 import numpy as np
-from typing import Dict, NamedTuple
+from typing import Dict, NamedTuple, Optional
 import jax
 from jax import numpy as jnp
-
-from pacoh.modules.util import _handle_batch_input_dimensionality
 
 
 class Statistics(NamedTuple):
@@ -93,6 +89,62 @@ class Sampler:
         start = self.i * self.batch_size
         end = start + self.batch_size
         return self.xs[start:end], self.ys[start:end]
+
+
+""" ----- Dimension Handling ----- """
+def _handle_point_input_dimensionality(self, x, y):
+    # TODO merge with the _util function and just use that
+
+    if x.ndim == 1:
+        assert x.shape[-1] == self.input_dim
+        x = x.reshape((-1, self.input_dim))
+
+    if isinstance(y, float) or y.ndim == 0:
+        y = np.array(y)
+        y = y.reshape((1,))
+    elif y.ndim == 1:
+        pass
+    else:
+        raise AssertionError('y must not have more than 1 dim')
+    return x, y
+
+def _handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = True):
+    """
+    Takes a dataset S=(xs,ys) and returns it in a uniform fashion. x shall have shape (num_points, input_dim) and
+    y shall have size (num_points), that is, we only consider scalar regression targets.
+    Args:
+        xs: The inputs
+        ys: The labels (optional)
+        flatten: Whether to return ys as (num_points), or (num_points, 1)
+    Notes:
+        ys can be None, to easily handle test data.
+    """
+    if xs.ndim == 1:
+        xs = np.expand_dims(xs, -1)
+
+    assert xs.ndim == 2
+
+    if ys is not None:
+        if flatten_ys:
+            ys = ys.flatten()
+            assert xs.shape[0] == ys.size
+            return xs, ys
+        else:
+            if ys.ndim == 1:
+                ys = np.expand_dims(ys, -1)
+            assert xs.shape[0] == ys.shape[0], "Number of points and labels is not the same"
+            assert ys.ndim == 2
+
+
+        if flatten:
+            return xs, ys.flatten()
+        else:
+            return xs, ys
+    else:
+        return xs
+
+
+
 
 
 

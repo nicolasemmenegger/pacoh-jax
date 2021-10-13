@@ -1,16 +1,15 @@
 import functools
-import warnings
 from typing import Optional, Dict, Union
 
 import jax
 from haiku import Transformed, TransformedWithState, MultiTransformed, MultiTransformedWithState
-from jax import vmap, numpy as jnp, jit
+from jax import vmap, numpy as jnp
 import haiku as hk
 
 from pacoh.models.pacoh_map_gp import BaseLearnerInterface
 from pacoh.modules.distributions import JAXGaussianLikelihood
-from pacoh.modules.gp.gp_lib import JAXExactGP
-from pacoh.modules.gp.kernels import JAXRBFKernel
+from pacoh.modules.gp_lib import JAXExactGP
+from pacoh.modules.kernels import JAXRBFKernel
 
 
 def get_batched_module(transformed: Union[Transformed, MultiTransformed, TransformedWithState, MultiTransformedWithState],
@@ -107,8 +106,6 @@ multi_transform_and_batch_module_with_state = functools.partial(_transform_batch
 
 """ ------ Testing code ------- """
 if __name__ == "__main__":
-    from jax.config import config
-
     # config.update("jax_debug_nans", True)
     # config.update('jax_disable_jit', True)
 

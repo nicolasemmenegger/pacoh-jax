@@ -1,70 +1,20 @@
 import functools
 import warnings
-from typing import NamedTuple, Any, TypeVar, Callable, Dict
+from typing import Callable, Dict
 
 import jax
 import numpy as np
 import numpyro.distributions
 import optax
-import haiku as hk
-
 from jax import numpy as jnp
 from tqdm import trange
 
 from pacoh.modules.abstract import RegressionModel
-from pacoh.modules.data_handling import Sampler
+from pacoh.modules.pure_functions import LikelihoodInterface, get_pure_batched_likelihood_functions, \
+    get_pure_batched_nn_functions
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
-from pacoh.modules.util import pytree_unstack, _handle_batch_input_dimensionality, Tree, broadcast_params, pytree_shape, \
-    stack_distributions
-from pacoh.modules.bnn.batched_modules import transform_and_batch_module, multi_transform_and_batch_module
-from pacoh.modules.distributions import JAXGaussianLikelihood
-
-
-@transform_and_batch_module
-def get_pure_batched_nn_functions(output_dim, hidden_layer_sizes, activation):
-    def nn_forward(xs):
-        nn = hk.nets.MLP(output_sizes=hidden_layer_sizes + (output_dim,), activation=activation)
-        return nn(xs)
-
-    return nn_forward
-
-
-class LikelihoodInterface(NamedTuple):
-    log_prob: Any
-    get_posterior_from_means: Any
-
-
-@functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'get_posterior_from_means': 1})
-def get_pure_batched_likelihood_functions(likelihood_initial_std):
-    def factory() -> LikelihoodInterface:
-        likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std)
-
-        def log_prob(ys_true, ys_pred):
-            return likelihood.log_prob(ys_true, ys_pred)
-
-        def get_posterior_from_means(ys_pred):  # add noise to a mean prediction (same as add_noise with a zero_variance_pred_f)
-            return likelihood.get_posterior_from_means(ys_pred)
-
-        return get_posterior_from_means, LikelihoodInterface(log_prob=log_prob,
-                                                             get_posterior_from_means=get_posterior_from_means)
-
-    return factory
-
-
-# def sample_gaussian_tree(mean_tree, std_tree, key, n_samples):
-#     num_params = len(jax.tree_util.tree_leaves(mean_tree))  # number of prng keys we need
-#     key, *keys = jax.random.split(key, num_params + 1)  # generate some key leaves
-#     keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(mean_tree),
-#                                              keys)  # build tree structure with keys
-#
-#     def sample_leaf(mean, std, key):
-#         mean = jnp.expand_dims(mean, -1)
-#         std = jnp.expand_dims(std, -1)
-#
-#         return (mean + jax.random.normal(key, (n_samples, *mean.shape), dtype=jnp.float32) * std).squeeze(axis=-1)
-#
-#     return jax.tree_multimap(sample_leaf, mean_tree, std_tree, keys_tree)
-
+from pacoh.util.tree import pytree_unstack, Tree, broadcast_params, pytree_shape, stack_distributions
+from pacoh.util.data_handling import _handle_batch_input_dimensionality, Sampler
 
 def neg_elbo(posterior: Dict[str, GaussianBeliefState],
              key: jax.random.PRNGKey,
@@ -204,9 +154,6 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self.optimizer_state = self.optimizer.init(self.posterior)
 
         """ E) Setup pure objective function """
-
-        print("ThE NUMBER OF TRAINING POINTS IS", self._num_train_points)
-        print(self.prior_weight)
         elbo_fn = functools.partial(neg_elbo,
                                     prior=self.prior,
                                     prior_weight=self.prior_weight,
@@ -217,7 +164,6 @@ class BayesianNeuralNetworkVI(RegressionModel):
                                     fixed_likelihood_params=self.fixed_likelihood_params)
 
         self.elbo_fn = elbo_fn
-
         self.elbo_val_and_grad = jax.jit(jax.value_and_grad(elbo_fn))
         self.batched_nn = jax.jit(self.batched_nn_apply_fn)
 

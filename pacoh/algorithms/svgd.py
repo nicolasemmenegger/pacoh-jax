@@ -1,4 +1,3 @@
-import sys
 import warnings
 from typing import Union
 
@@ -9,7 +8,7 @@ from jax import grad
 from jax import numpy as jnp
 
 from pacoh.modules.priors_posteriors import GaussianBeliefState
-from pacoh.modules.util import Tree, pytree_sum
+from pacoh.util.tree import Tree, pytree_sum
 
 
 class SVGD:
@@ -58,8 +57,6 @@ class SVGD:
         kernel_grad_val = self.kernel_grads(particles) # shape (n, n, *p)
         # (i, j, *ids) corresponds to (grad_{x_j} f(x_j, x_i))[ids]
 
-
-        warnings.warn("this normalization is not consistent with the one in Jonas' code")
         def phi_leaf(leaf_score, leaf_kernel_grad):
             return (kernel_mat_val @ leaf_score + jnp.sum(leaf_kernel_grad, axis=1)) / n
 

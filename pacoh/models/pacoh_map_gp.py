@@ -13,12 +13,11 @@ from absl import logging
 from jax import numpy as jnp
 
 from pacoh.modules.abstract import RegressionModelMetaLearned
-from pacoh.modules.data_handling import Statistics
+from pacoh.util.data_handling import Statistics, _handle_batch_input_dimensionality
 from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
-from pacoh.modules.gp.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
-from pacoh.modules.gp.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
-from pacoh.modules.util import _handle_batch_input_dimensionality, pytrees_stack
-
+from pacoh.modules.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
+from pacoh.modules.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
+from pacoh.util.tree import pytrees_stack
 
 class BaseLearnerInterface(NamedTuple):
     """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
