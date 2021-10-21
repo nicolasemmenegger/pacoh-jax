@@ -170,7 +170,6 @@ class BayesianNeuralNetworkVI(RegressionModel):
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
         # TODO ask Jonas what about recomputing the posterior -> start from scratch?  Not in an online setting I suppose
-        warnings.warn("In this scenario, _recompute_postior does nothing for now, need to call fit explicitly")
         pass
 
     """ TODO: this could be put in the base class maybe?"""
@@ -217,13 +216,11 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._rds, nn_key, lh_key = jax.random.split(self._rds, 3)
 
         nn_params = GaussianBelief.rsample(self.posterior['nn'], nn_key, num_posterior_samples)
-
         ys_pred = self.batched_nn(nn_params, None, xs)
 
         if self.learn_likelihood:
             lh_params = GaussianBelief.rsample(self.posterior['lh'], lh_key, num_posterior_samples)
         else:
-            # lh_params = self.fixed_likelihood_params # there are not enough here
             lh_params = broadcast_params(pytree_unstack(self.fixed_likelihood_params, 1)[0], num_posterior_samples)
 
         pred_dists = self.batched_likelihood_apply_fns_batch_inputs.get_posterior_from_means(lh_params, None, ys_pred)
@@ -238,12 +235,10 @@ class BayesianNeuralNetworkVI(RegressionModel):
         pred_mixture_transformed = AffineTransformedDistribution(pred_mixture,
                                                                  normalization_mean=self.y_mean,
                                                                  normalization_std=self.y_std)
-        output_normal_dist = self._affine_transformed_distribution_to_normal(pred_mixture_transformed)
-
         if return_density:
-            return output_normal_dist
+            return pred_mixture_transformed
         else:
-            return output_normal_dist.mean, output_normal_dist.scale
+            return pred_mixture_transformed.mean, pred_mixture_transformed.stddev
 
 
 
@@ -251,7 +246,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._rds, step_key = jax.random.split(self._rds)
         nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
-        # self.optimizer_state = new_opt_state # WARNING this was wrong before
+        self.optimizer_state = new_opt_state
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
 
@@ -271,21 +266,21 @@ if __name__ == '__main__':
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
-    nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, batch_size_vi=10, hidden_layer_sizes=(32, 32), prior_weight=0,
+    nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, batch_size_vi=10, hidden_layer_sizes=(32, 32), prior_weight=0.001,
                                  learn_likelihood=True)
     nn.add_data_points(x_train, y_train)
 
-    n_iter_fit = 2000  # 2000
-    for i in range(10):
+    n_iter_fit = 200  # 2000
+    for i in range(200):
         nn.fit(log_period=100, num_iter_fit=n_iter_fit)
         from matplotlib import pyplot as plt
 
-        pred, out_dist = nn.predict(x_plot)
+        pred = nn.predict(x_plot)
         lcb, ucb = nn.confidence_intervals(x_plot)
         # ucb = out_dist.mean + out_dist.variance
         # lcb = out_dist.mean - out_dist.variance
         plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
-        plt.plot(x_plot, out_dist.mean)
+        plt.plot(x_plot, pred.mean)
         plt.scatter(x_train, y_train)
 
         plt.show()

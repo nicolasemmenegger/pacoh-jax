@@ -20,7 +20,7 @@ from pacoh.modules.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
 from pacoh.util.tree import pytrees_stack
 
 class BaseLearnerInterface(NamedTuple):
-    """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky accross calls
+    """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky across calls
     kernel, mean and likelihood, but needs to perform target inference in parallel. """
     """This is the interface PACOH modules learners should provide.
     hyper_prior_ll: A function that yields the log likelihood of the prior parameters under the hyperprior
@@ -33,8 +33,8 @@ class BaseLearnerInterface(NamedTuple):
     base_learner_mll_estimator: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.float32]
 
 
-def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learning_mode,
-                                    feature_dim, mean_nn_layers, kernel_nn_layers):
+def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_option, learning_mode,
+                                    feature_dim, mean_nn_layers, kernel_nn_layers, learn_likelihood=True, initial_noise_std=1.0):
     def factory():
         """The arguments here are what _setup_gp_prior had. Maybe they need to be factories tho"""
         # setup kernel module
@@ -63,7 +63,11 @@ def construct_pacoh_map_forward_fns(input_dim, mean_option, covar_option, learni
         else:
             raise ValueError('Invalid mean_module option')
 
-        likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
+        if learn_likelihood:
+            likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance_constraint_gt=1e-3)
+        else:
+            likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance=initial_noise_std*initial_noise_std, learn_likelihood=False)
+
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
         init_fn = base_learner.init_fn

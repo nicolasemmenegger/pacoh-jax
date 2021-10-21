@@ -44,10 +44,13 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 
 class JAXGaussianLikelihood(hk.Module):
-    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1):
+    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1, learn_likelihood=True):
         super().__init__()
         variance = jnp.ones((output_dim,))*variance
-        self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
+        if learn_likelihood:
+            self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
+        else:
+            self.variance = lambda: variance
 
     def __call__(self, posterior):
         scale = jnp.sqrt(posterior.scale**2 + self.variance())

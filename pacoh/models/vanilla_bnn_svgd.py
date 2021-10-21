@@ -40,7 +40,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         self.likelihood_std = likelihood_std
         self.batch_size = batch_size
         self.n_particles = n_particles
-        self.sqrt_mode = sqrt_mode # TODO ask Jonas what this is?
+        self.sqrt_mode = sqrt_mode  # TODO ask Jonas what this is?
         self.learn_likelihood = learn_likelihood
 
         if not learn_likelihood:
@@ -81,8 +81,9 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
 
         warnings.warn("the option to not learn the likelihood is currently not supported")
         if not self.learn_likelihood:
-            self.particles['lh'] = likelihood_params # TODO make sure it's not getting differentated in that case
+            self.particles['lh'] = likelihood_params  # TODO make sure it's not getting differentiated in that case
 
+        warnings.warn("meta-learned prior mode not supported yet")
         # if self.meta_learned_prior_mode:
         #     # initialize posterior particles from meta-learned prior
         #     params = tf.reshape(self.prior.sample(n_particles // self.prior.n_batched_priors), (n_particles, -1))
@@ -94,6 +95,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         #     self.particles = tf.Variable(tf.concat([nn_params, likelihood_params], axis=-1))
 
         # setup kernel and optimizer
+
         """ D) setup all the forward functions needed by the SVGD class. """
         def target_log_prob_batched(particles, rngs, *data):
             # predict

@@ -140,7 +140,7 @@ if __name__ == '__main__':
     x_val = np.random.uniform(-4, 4, size=(n_val, d))
     y_val = np.sin(x_val) + np.random.normal(scale=0.1, size=x_val.shape)
 
-    nn = BayesianNeuralNetworkSVGD(x_train, y_train, hidden_layer_sizes=(64, 64), prior_weight=0.001, bandwidth=1000.0)
+    nn = BayesianNeuralNetworkSVGD(x_train, y_train, hidden_layer_sizes=(64, 64), prior_weight=0.001, bandwidth=1000.0, learn_likelihood=False)
 
     n_iter_fit = 500
     for i in range(10):

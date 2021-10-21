@@ -20,9 +20,9 @@ class LikelihoodInterface(NamedTuple):
 
 
 @functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'get_posterior_from_means': 1})
-def get_pure_batched_likelihood_functions(likelihood_initial_std):
+def get_pure_batched_likelihood_functions(likelihood_initial_std, learn_likelihood=True):
     def factory():
-        likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std)
+        likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std*likelihood_initial_std, learn_likelihood=learn_likelihood)
 
         def log_prob(ys_true, ys_pred):
             return likelihood.log_prob(ys_true, ys_pred)
