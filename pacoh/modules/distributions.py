@@ -1,10 +1,6 @@
-import warnings
-
-import numpyro.distributions
-from numpyro.distributions import Distribution, Normal
+from numpyro.distributions import Normal
 from numpyro.distributions import TransformedDistribution
 from numpyro.distributions.transforms import AffineTransform
-import torch
 import numpy as np
 from jax import numpy as jnp
 import haiku as hk
@@ -25,8 +21,7 @@ class AffineTransformedDistribution(TransformedDistribution):
     """
 
     def __init__(self, base_dist, normalization_mean, normalization_std):
-        # self.loc_tensor = torch.tensor(normalization_mean).float().reshape((1,))
-        self.scale = normalization_std.reshape((1,))
+        self.norm_scale = normalization_std.reshape((1,)) # so we can apply it on batches
         normalization_transform = AffineTransform(loc=normalization_mean, scale=normalization_std)
         super().__init__(base_dist, normalization_transform)
 
@@ -36,17 +31,21 @@ class AffineTransformedDistribution(TransformedDistribution):
 
     @property
     def stddev(self):
-        return np.exp(np.log(self.base_dist.scale) + np.log(self.scale))
+        if hasattr(self.base_dist, "scale"):
+            return np.exp(np.log(self.base_dist.scale) + np.log(self.norm_scale))
+        elif hasattr(self.base_dist, "variance"):
+            return np.exp(0.5*np.log(self.base_dist.variance) + np.log(self.norm_scale))
+        elif hasattr(self.base_dist, "stddev"):
+            return np.exp(np.log(self.base_dist.stddev) + np.log(self.norm_scale))
 
     @property
     def variance(self):
-        return np.exp(np.log(self.base_dist.variance) + 2 * np.log(self.scale))
+        return np.exp(np.log(self.base_dist.variance) + 2 * np.log(self.norm_scale))
 
 
 class JAXGaussianLikelihood(hk.Module):
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1):
         super().__init__()
-        # TODO, to avoid numerical errors, I should store the std, not the variance, no
         variance = jnp.ones((output_dim,))*variance
         self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
 

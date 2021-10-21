@@ -4,11 +4,11 @@ import jax.random
 import numpy as np
 import numpyro.distributions
 
-from pacoh.modules import JAXExactGP, JAXConstantMean
+from pacoh.modules.gp_lib import JAXExactGP, JAXConstantMean
 from pacoh.modules.kernels import JAXRBFKernel
 from pacoh.modules.distributions import AffineTransformedDistribution, JAXGaussianLikelihood
 from pacoh.modules.abstract import RegressionModel
-from pacoh.util import _handle_batch_input_dimensionality
+from pacoh.util.data_handling import _handle_batch_input_dimensionality
 from typing import Dict, NamedTuple, Any
 import haiku as hk
 
@@ -69,10 +69,14 @@ class GPRegressionVanilla(RegressionModel):
                                                    kernel_lengthscale,
                                                    likelihood_variance)
 
-        init_fn, self._apply_fns = hk.multi_transform_with_state(factory)
+        self._init_fn, self._apply_fns = hk.multi_transform_with_state(factory)
         self._rds, init_key = jax.random.split(self._rds)
         # initialize parameters using some dummy data
-        self._params, self._state = init_fn(init_key, jnp.ones((1, input_dim)))
+        self._params, self._state = self._init_fn(init_key, jnp.ones((1, input_dim)))
+
+        # keep these around to reset to prior and evaluate prior
+        self._prior_params = self._params
+        self._prior_state = self._state
 
     def predict(self, test_x, return_density=False, **kwargs):
         """
@@ -92,6 +96,7 @@ class GPRegressionVanilla(RegressionModel):
         test_x_normalized = self._normalize_data(test_x)
         self._rds, predict_key = jax.random.split(self._rds)
         pred_dist, self._state = self._apply_fns.pred_dist_fn(self._params, self._state, predict_key, test_x_normalized)
+
         pred_dist_transformed = AffineTransformedDistribution(pred_dist,
                                                               normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
@@ -103,9 +108,7 @@ class GPRegressionVanilla(RegressionModel):
             return pred_mean, pred_std
 
     def reset_to_prior(self):
-        raise NotImplementedError
-        self._reset_data()
-        self.gp.reset_to_prior()
+        self._params, self._state = self._prior_params, self._prior_state
 
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
@@ -121,26 +124,33 @@ class GPRegressionVanilla(RegressionModel):
         Returns:
             The prior distributions
         """
-        return self._prior_fn(xs)
+        self._normalize_data(xs)
+        self._rds, predict_key = jax.random.split(self._rds)
+        pred_dist, _ = self._apply_fns.pred_dist_fn(self._prior_params, self._prior_state, predict_key, xs)
 
+        pred_dist_transformed = AffineTransformedDistribution(pred_dist,
+                                                              normalization_mean=self.y_mean,
+                                                              normalization_std=self.y_std)
 
-    # def predict_mean_std(self, test_x):
-    #     # do we really need this?
-    #     return self.predict(test_x, return_density=False)
+        return pred_dist_transformed
 
-    def state_dict(self):
-        # TODO rename
-        state_dict = {
-            'model': self.gp.state_dict(),
-        }
-        return state_dict
+    def predict_mean_std(self, test_x):
+        return self.predict(test_x, return_density=False)
 
-    def load_state_dict(self, state_dict):
-        self.gp.load_state_dict(state_dict['model'])
+    # def state_dict(self):
+    #     # TODO rename
+    #     state_dict = {
+    #         'model': self.gp.state_dict(),
+    #     }
+    #     return state_dict
+    #
+    # def load_state_dict(self, state_dict):
+    #     self.gp.load_state_dict(state_dict['model'])
 
-    def _vectorize_pred_dist(self, pred_dist):
-        # this is because ultimately, we do not want a TransformedDistribution object
-        return numpyro.distributions.Normal(pred_dist.mean.flatten(), pred_dist.stddev.flatten())
+    # def _vectorize_pred_dist(self, pred_dist):
+    #     print("this is called")
+    #     # this is because ultimately, we do not want a TransformedDistribution object
+    #     return numpyro.distributions.Normal(pred_dist.mean.flatten(), pred_dist.stddev.flatten())
 
 
 if __name__ == "__main__":
@@ -162,17 +172,23 @@ if __name__ == "__main__":
     x_data_train, x_data_test = x_data[:n_train_samples].numpy(), x_data[n_train_samples:].numpy()
     y_data_train, y_data_test = y_data[:n_train_samples].numpy(), y_data[n_train_samples:].numpy()
 
-    gp_mll = GPRegressionVanilla(input_dim=x_data.shape[-1])
-    gp_mll.add_data(x_data_train, y_data_train)
+    gp = GPRegressionVanilla(input_dim=x_data.shape[-1])
+    gp.add_data(x_data_train, y_data_train)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 
-    pred_dist = gp_mll.predict(x_plot, return_density=True)
-    pred_mean, pred_std = pred_dist.mean, pred_dist.stddev
-    lcb, ucb = pred_mean-pred_std, pred_mean + pred_std
-    lcb, ucb = lcb.flatten(), ucb.flatten()
+    pred_dist = gp.predict(x_plot, return_density=True)
+    lcb, ucb = gp.confidence_intervals(x_plot, confidence=0.9)
+    # pred_dist = gp._affine_transformed_distribution_to_normal(pred_dist)
+    pred_mean, pred_std = pred_dist.mean, pred_dist.scale
+    # lcb, ucb = pred_mean-pred_std, pred_mean + pred_std
+    # lcb, ucb = lcb.flatten(), ucb.flatten()
     plt.plot(x_plot, pred_mean)
-    plt.fill_between(x_plot, lcb, ucb, alpha=0.4)
+    plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.4)
+
+    gp.reset_to_prior()
+    pred_mean, _ = gp.predict(x_plot, return_density=False)
+    plt.plot(x_plot, pred_mean)
 
     plt.scatter(x_data_test, y_data_test)
     plt.scatter(x_data_train, y_data_train)

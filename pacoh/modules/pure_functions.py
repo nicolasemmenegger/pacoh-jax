@@ -1,7 +1,7 @@
 import functools
 
 from typing import NamedTuple, Any
-from haiku._src.attention import hk
+import haiku as hk
 from pacoh.modules.batched_modules import transform_and_batch_module, multi_transform_and_batch_module
 from pacoh.modules.distributions import JAXGaussianLikelihood
 

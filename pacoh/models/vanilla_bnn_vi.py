@@ -10,6 +10,7 @@ from jax import numpy as jnp
 from tqdm import trange
 
 from pacoh.modules.abstract import RegressionModel
+from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.modules.pure_functions import LikelihoodInterface, get_pure_batched_likelihood_functions, \
     get_pure_batched_nn_functions
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
@@ -79,6 +80,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
 
 class BayesianNeuralNetworkVI(RegressionModel):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
+                 normalization_stats: Dict[str, np.array] = None,
                  random_state: jax.random.PRNGKey = None,
                  hidden_layer_sizes=(32, 32), activation=jax.nn.elu,
                  likelihood_std=0.1, learn_likelihood=True, prior_std=1.0, prior_weight=0.1,
@@ -94,7 +96,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param learn_likelihood: Whether to interpret the likelihood std as a learnable variable with a mean and std itself
         :param prior_std: The std of the prior on each NN weight
         :param prior_weight: Multiplicative factor before the KL divergence term in the ELBO
-        :param likelihood_prior_mean: TODO figure out why this is not the same thing as the likelihood std
+        :param likelihood_prior_mean:
         :param likelihood_prior_std: The sigma in sigmall sim N(0,sigma)
         :param batch_size_vi: The number of samples from the posterior to approximate the expectation in the ELBO
         :param batch_size: The number of data points you get while training and predicting
@@ -106,6 +108,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self.likelihood_std = likelihood_std
         self.batch_size = batch_size
         self.batch_size_vi = batch_size_vi
+        self._set_normalization_stats(normalization_stats)
 
         """ A) Get batched forward functions for the nn and likelihood"""
         keys = jax.random.split(self._rds, self.batch_size_vi + 1)
@@ -115,7 +118,6 @@ class BayesianNeuralNetworkVI(RegressionModel):
                                                                                         hidden_layer_sizes,
                                                                                         activation)
 
-        # if non learnable, this should be a REAL initialization TODO
         batched_likelihood_init_fn, self.batched_likelihood_apply_fns, self.batched_likelihood_apply_fns_batch_inputs = get_pure_batched_likelihood_functions(likelihood_prior_mean)
 
         """ B) Get dummy pytrees for the different module parameters => TODO somehow abstract this inside some utils. """
@@ -134,19 +136,17 @@ class BayesianNeuralNetworkVI(RegressionModel):
             'nn': nn_prior_state,
         }
         self.posterior = {
-            'nn': nn_prior_state.copy(),
+            'nn': nn_prior_state,
         }
 
         self.learn_likelihood = learn_likelihood
         if learn_likelihood:
             lh_prior_state = GaussianBeliefState.initialize(likelihood_prior_mean, likelihood_prior_std, likelihood_param_template)
             self.prior['lh'] = lh_prior_state
-            self.posterior['lh'] = lh_prior_state.copy()
+            self.posterior['lh'] = lh_prior_state
             self.fixed_likelihood_params = None
         else:
             self.fixed_likelihood_params = likelihood_params
-            # TODO make sure this gets initialized as desired
-        # TODO understand why Jonas initializes the prior differently for learnable and non-learnable likelihood?
 
         """ D) Setup optimizer: posterior parameters """
         lr_scheduler = optax.constant_schedule(lr)
@@ -208,29 +208,23 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._rds, sampler_key = jax.random.split(self._rds)
         return Sampler(xs, ys, batch_size, sampler_key)
 
-    def predict(self, xs, num_posterior_samples=20):
+    def predict(self, xs, num_posterior_samples=20, return_density=True):
         # a) data handling
         xs = _handle_batch_input_dimensionality(xs)
-        warnings.warn("normalize")
-        # xs = self._normalize_data(xs)
+        xs = self._normalize_data(xs)
 
         # b) nn prediction
         self._rds, nn_key, lh_key = jax.random.split(self._rds, 3)
 
         nn_params = GaussianBelief.rsample(self.posterior['nn'], nn_key, num_posterior_samples)
-        nn_shape = pytree_shape(nn_params)
-
 
         ys_pred = self.batched_nn(nn_params, None, xs)
-        mean_shape = ys_pred.shape
 
         if self.learn_likelihood:
             lh_params = GaussianBelief.rsample(self.posterior['lh'], lh_key, num_posterior_samples)
         else:
             # lh_params = self.fixed_likelihood_params # there are not enough here
             lh_params = broadcast_params(pytree_unstack(self.fixed_likelihood_params, 1)[0], num_posterior_samples)
-
-        lh_shape = pytree_shape(lh_params)
 
         pred_dists = self.batched_likelihood_apply_fns_batch_inputs.get_posterior_from_means(lh_params, None, ys_pred)
         # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
@@ -241,18 +235,23 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
 
-        # TODO handle
-        #ys_pred = self._unnormalize_preds(ys_pred)  # should that be some kind of mean??
-        #pred_dist = self._unnormalize_predictive_dist(pred_mixture)
+        pred_mixture_transformed = AffineTransformedDistribution(pred_mixture,
+                                                                 normalization_mean=self.y_mean,
+                                                                 normalization_std=self.y_std)
+        output_normal_dist = self._affine_transformed_distribution_to_normal(pred_mixture_transformed)
 
-        return jnp.mean(ys_pred, axis=0), pred_mixture
+        if return_density:
+            return output_normal_dist
+        else:
+            return output_normal_dist.mean, output_normal_dist.scale
+
 
 
     def _step(self, x_batch, y_batch):
         self._rds, step_key = jax.random.split(self._rds)
         nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
-        self.optimizer_state = new_opt_state # WARNING this was wrong before
+        # self.optimizer_state = new_opt_state # WARNING this was wrong before
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
 
@@ -272,21 +271,21 @@ if __name__ == '__main__':
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
-    nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, hidden_layer_sizes=(32, 32), prior_weight=0.001,
+    nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, batch_size_vi=10, hidden_layer_sizes=(32, 32), prior_weight=0,
                                  learn_likelihood=True)
     nn.add_data_points(x_train, y_train)
 
     n_iter_fit = 2000  # 2000
     for i in range(10):
-        nn.fit(log_period=10, num_iter_fit=n_iter_fit)
+        nn.fit(log_period=100, num_iter_fit=n_iter_fit)
         from matplotlib import pyplot as plt
 
-        pred, pred_mixture = nn.predict(x_plot)
-
-        ucb = pred + pred_mixture.variance
-        lcb = pred - pred_mixture.variance
+        pred, out_dist = nn.predict(x_plot)
+        lcb, ucb = nn.confidence_intervals(x_plot)
+        # ucb = out_dist.mean + out_dist.variance
+        # lcb = out_dist.mean - out_dist.variance
         plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
-        plt.plot(x_plot, pred_mixture.mean)
+        plt.plot(x_plot, out_dist.mean)
         plt.scatter(x_train, y_train)
 
         plt.show()

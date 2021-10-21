@@ -8,7 +8,10 @@ class PositiveParameter(hk.Module):
         super().__init__(name=name)
         self.raw_init = jnp.log(initial_value - boundary_value)
         self.boundary_value = boundary_value
-        self.shape = initial_value.shape
+        if isinstance(initial_value, float):
+            self.shape = []
+        else:
+            self.shape = initial_value.shape
 
     def __call__(self):
         exponentiated = jnp.exp(hk.get_parameter("__positive_log_scale_param", dtype=jnp.float32, shape=self.shape,

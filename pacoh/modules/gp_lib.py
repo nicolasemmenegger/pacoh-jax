@@ -2,8 +2,8 @@ import functools
 
 import jax.lax.linalg
 import numpyro.distributions
-from abc import ABC, abstractmethod
-from jax import numpy as jnp, vmap
+from abc import abstractmethod
+from jax import numpy as jnp
 from jax.scipy.linalg import cho_solve, cho_factor
 import haiku as hk
 
@@ -65,13 +65,13 @@ class JAXExactGP:
             mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve((chol, True), self._ys_centered(xs, ys)))
             var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
             std = jnp.sqrt(var)
-            return numpyro.distributions.Normal(loc=mean, scale=std)
+            return numpyro.distributions.Normal(loc=mean, scale=std) # TODO figure out batch_shape and event_shape
 
         def no_data(operand):
             x, _, __ = operand
             return self._prior(x)
 
-        # TODO warning: this is quite confusing. I had this as a jax.lax.cond/hk.cond, but because the distinction
+        # warning: this is quite confusing. I had this as a jax.lax.cond/hk.cond, but because the distinction
         # is on the size of xs, we cannot use these constructs, because they exactly assume that the size of
         # the inputs of both branches is the same
         if xs.size > 0:
@@ -132,7 +132,7 @@ class JAXConstantMean(JAXMean):
         # works for both batch or unbatched
         mean = hk.get_parameter("mu", shape=[], dtype=jnp.float32,
                                 init=hk.initializers.Constant(self.init_constant))
-        return jnp.ones(x.shape, dtype=jnp.float64) * mean
+        return jnp.ones(x.shape) * mean
 
 
 class JAXZeroMean(JAXMean):

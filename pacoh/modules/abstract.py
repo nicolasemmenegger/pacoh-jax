@@ -2,6 +2,8 @@ import warnings
 from typing import Union
 
 import numpy as np
+from numpyro.distributions import Normal
+
 from pacoh.util.data_handling import _handle_batch_input_dimensionality, _handle_point_input_dimensionality
 from config import device
 
@@ -29,8 +31,8 @@ class RegressionModel(ABC):
         """
         self.input_dim = input_dim
         self.normalize_data = normalize_data
-        self.xs_data = jnp.zeros((0, self.input_dim), dtype=np.double)
-        self.ys_data = jnp.zeros((0,), dtype=np.double)
+        self.xs_data = jnp.zeros((0, self.input_dim))
+        self.ys_data = jnp.zeros((0,))
         self._num_train_points = 0
         self._rds = random_state if random_state is not None else jax.random.PRNGKey(42)
 
@@ -63,8 +65,7 @@ class RegressionModel(ABC):
         assert xs.ndim == 2 and xs.shape[1] == self.input_dim
         # handle input dimensionality and normalize data
         xs, ys = _handle_batch_input_dimensionality(xs, ys)
-        #xs, ys = self._normalize_data(xs, ys)
-        warnings.warn("undo")
+        xs, ys = self._normalize_data(xs, ys)
         # concatenate to new datapoints
         self.xs_data = np.concatenate([self.xs_data, xs])
         self.ys_data = np.concatenate([self.ys_data, ys])
@@ -119,11 +120,12 @@ class RegressionModel(ABC):
 
     def confidence_intervals(self, test_x, confidence=0.9, **kwargs):
         pred_dist = self.predict(test_x, return_density=True, **kwargs)
-        pred_dist = self._vectorize_pred_dist(pred_dist)
+        pred_dist = self._affine_transformed_distribution_to_normal(pred_dist)
         alpha = (1 - confidence) / 2
-        ucb = pred_dist.icdf(np.ones(test_x.size) * (1 - alpha))
-        lcb = pred_dist.icdf(np.ones(test_x.size) * alpha)
-        return ucb, lcb
+        ucb = pred_dist.icdf((1 - alpha)*jnp.ones(pred_dist.batch_shape))
+        lcb = pred_dist.icdf(alpha*jnp.ones(pred_dist.batch_shape))
+        return lcb, ucb
+
 
     """ ----- Private methods ----- """
     @abstractmethod
@@ -156,7 +158,6 @@ class RegressionModel(ABC):
             self.y_std = normalization_stats_dict['y_std'].squeeze()
 
     def _calib_error(self, pred_dist_vectorized, test_t_tensor):
-        raise NotImplementedError
         return _calib_error(pred_dist_vectorized, test_t_tensor)
 
     def _normalize_data(self, xs, ys=None):
@@ -178,16 +179,49 @@ class RegressionModel(ABC):
         """
         # save mean and variance of data for normalization
         if self.normalize_data:
-            self.x_mean, self.y_mean = jnp.mean(X, axis=0), jnp.mean(Y, axis=0)
-            self.x_std, self.y_std = jnp.std(X, axis=0) + 1e-8, jnp.std(Y, axis=0) + 1e-8
+            self.x_mean, self.y_mean = jnp.mean(xs, axis=0), jnp.mean(ys, axis=0)
+            self.x_std, self.y_std = jnp.std(xs, axis=0) + 1e-8, jnp.std(ys, axis=0) + 1e-8
         else:
-            self.x_mean, self.y_mean = jnp.zeros(X.shape[1]), jnp.zeros(Y.shape[1])
-            self.x_std, self.y_std = jnp.ones(X.shape[1]), jnp.ones(Y.shape[1])
+            self.x_mean, self.y_mean = jnp.zeros(xs.shape[1]), jnp.zeros(ys.shape[1])
+            self.x_std, self.y_std = jnp.ones(xs.shape[1]), jnp.ones(ys.shape[1])
 
+
+    # def _unnormalize_pred(self, pred_mean, pred_std):
+    #     assert hasattr(self, "x_mean") and hasattr(self, "x_std"), "requires computing normalization stats beforehand"
+    #     assert hasattr(self, "y_mean") and hasattr(self, "y_std"), "requires computing normalization stats beforehand"
+    #
+    #     if self.normalize_data:
+    #         assert pred_mean.ndim == pred_std.ndim == 2 and pred_mean.shape[1] == pred_std.shape[1] == self.output_dim
+    #         if isinstance(pred_mean, torch.Tensor) and isinstance(pred_std, torch.Tensor):
+    #             y_mean_tensor, y_std_tensor = torch.tensor(self.y_mean).float(), torch.tensor(self.y_std).float()
+    #             pred_mean = pred_mean.mul(y_std_tensor[None, :]) + y_mean_tensor[None, :]
+    #             pred_std = pred_std.mul(y_std_tensor[None, :])
+    #         else:
+    #             pred_mean = pred_mean.multiply(self.y_std[None, :]) + self.y_mean[None, :]
+    #             pred_std = pred_std.multiply(self.y_std[None, :])
+    #
+    #     return pred_mean, pred_std
+    #
+    # def _initial_data_handling(self, train_x, train_t):
+    #     train_x, train_t = _handle_input_dimensionality(train_x, train_t)
+    #     self.input_dim, self.output_dim = train_x.shape[-1], train_t.shape[-1]
+    #     self.n_train_samples = train_x.shape[0]
+    #
+    #     # b) normalize data to exhibit zero mean and variance
+    #     self._compute_normalization_stats(train_x, train_t)
+    #     train_x_normalized, train_t_normalized = self._normalize_data(train_x, train_t)
+    #
+    #     # c) Convert the data into pytorch tensors
+    #     self.train_x = torch.from_numpy(train_x_normalized).contiguous().float().to(device)
+    #     self.train_t = torch.from_numpy(train_t_normalized).contiguous().float().to(device)
+
+        return self.train_x, self.train_t
     # def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution) -> numpyro.distributions.Distribution:
     #     warnings.warn("check all use cases her")
     #     return numpyro.distributions.Normal(loc=pred_dist.mean, scale=jnp.sqrt(pred_dist.variance))
 
+    def _affine_transformed_distribution_to_normal(self, transformed_dist):
+        return Normal(loc=transformed_dist.mean, scale=transformed_dist.stddev)
 
 class RegressionModelMetaLearned(RegressionModel, ABC):
     """
@@ -295,11 +329,11 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
     #     """
     #     return numpyro.distributions.Normal(pred_dist.mean, pred_dist.scale)
 
-def _calib_error(pred_dist_vectorized, test_t_tensor):
-    cdf_vals = pred_dist_vectorized.cdf(test_t_tensor)
-    
+def _calib_error(pred_dist_vectorized, test_ys):
+    cdf_vals = pred_dist_vectorized.cdf(test_ys)
+
     if test_t_tensor.shape[0] == 1:
-        test_t_tensor = test_t_tensor.flatten()
+        test_t_tensor = test_ys.flatten()
         cdf_vals = cdf_vals.flatten()
 
     num_points = test_t_tensor.shape[0]

@@ -1,7 +1,3 @@
-import functools
-import warnings
-from typing import Callable, Optional
-
 import haiku as hk
 import jax
 
@@ -68,7 +64,7 @@ class JAXRBFKernelNN(JAXKernel):
                                               boundary_value=length_scale_constraint_gt,
                                               name="LengthScale")
 
-        self.nn_ftr_map = hk.nets.MLP(output_sizes=(1,), activation=lambda x: x)
+        self.nn_ftr_map = hk.nets.MLP(output_sizes=layer_sizes+(1,), activation=lambda x: x)
 
     def __call__(self, x1, x2=None):
         x1 = self.nn_ftr_map(x1)
