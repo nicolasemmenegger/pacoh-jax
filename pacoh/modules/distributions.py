@@ -1,3 +1,4 @@
+import numpyro
 from numpyro.distributions import Normal
 from numpyro.distributions import TransformedDistribution
 from numpyro.distributions.transforms import AffineTransform
@@ -6,6 +7,7 @@ from jax import numpy as jnp
 import haiku as hk
 
 from pacoh.modules.common import PositiveParameter
+from pacoh.util.tree import stack_distributions
 
 
 class AffineTransformedDistribution(TransformedDistribution):
@@ -42,6 +44,10 @@ class AffineTransformedDistribution(TransformedDistribution):
     def variance(self):
         return np.exp(np.log(self.base_dist.variance) + 2 * np.log(self.norm_scale))
 
+    @property
+    def iid_normal(self):
+        return Normal(loc=self.mean, scale=self.stddev)
+
 
 class JAXGaussianLikelihood(hk.Module):
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1, learn_likelihood=True):
@@ -67,3 +73,8 @@ class JAXGaussianLikelihood(hk.Module):
         stds = jnp.broadcast_to(jnp.sqrt(var), (batch_size, *var.shape))
         return Normal(loc, scale=stds)
 
+
+def get_mixture(pred_dists, n):
+    pred_dists = stack_distributions(pred_dists)
+    mixture_weights = numpyro.distributions.Categorical(probs=jnp.ones((n,)) / n)
+    return numpyro.distributions.MixtureSameFamily(mixture_weights, pred_dists)

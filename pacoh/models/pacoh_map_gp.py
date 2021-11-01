@@ -12,10 +12,11 @@ import torch
 from absl import logging
 from jax import numpy as jnp
 
-from pacoh.modules.abstract import RegressionModelMetaLearned
-from pacoh.util.data_handling import Statistics, _handle_batch_input_dimensionality
+from pacoh.models.meta_regression_base import RegressionModelMetaLearned
+from pacoh.util.data_handling import DataNormalizer, handle_batch_input_dimensionality
 from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
-from pacoh.modules.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
+from pacoh.modules.exact_gp import JAXExactGP
+from pacoh.modules.means import JAXMean, JAXConstantMean, JAXZeroMean
 from pacoh.modules.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
 from pacoh.util.tree import pytrees_stack
 
@@ -102,7 +103,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
                  normalize_data: bool = True,
-                 normalization_stats: Statistics = None,
+                 normalizer: DataNormalizer = None,
                  random_seed: jax.random.PRNGKey = None):
         """
         :param input_dim:
@@ -121,7 +122,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         :param normalization_stats:
         :param random_seed:
         """
-        super().__init__(normalize_data, random_seed)
+        super().__init__(normalize_data, normalize_data, normalization_stats, random_seed)
 
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla_gp'], 'Invalid learning mode'
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
@@ -145,8 +146,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             self.lr_scheduler = optax.constant_schedule(lr)
 
         """ ------- normalization stats & data setup  ------- """
-        self._normalization_stats = normalization_stats
-        # self.reset_to_prior()
         self.fitted = False
 
         """-------- Setup haiku differentiable functions and parameters -------"""
@@ -195,14 +194,14 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         for itr in range(1, n_iter + 1):
             print(itr)
             # a) choose a minibatch. TODO: make this more elegant
-            self._rds, choice_key = jax.random.split(self._rds)
+            self._rng, choice_key = jax.random.split(self._rng)
             batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
             batch = [task_dicts[i] for i in batch_indices]
             batched_xs = jnp.array([task['xs_train'] for task in batch])
             batched_ys = jnp.array([task['ys_train'] for task in batch])
             batched_states = pytrees_stack([task['hk_state'] for task in batch])
-            apply_rngs = jax.random.split(self._rds, 1+self.task_batch_size)
-            self._rds = apply_rngs[0]
+            apply_rngs = jax.random.split(self._rng, 1+self.task_batch_size)
+            self._rng = apply_rngs[0]
             apply_rngs = apply_rngs[1:]
 
             # b) get value and gradient
@@ -279,8 +278,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             (pred_mean, pred_std) predicted mean and standard deviation corresponding to p(t|test_x, test_context_x, context_y)
         """
         warnings.warn("I would suggest that meta_predict be deprecated in favor of separate fit and predict methods, no?", PendingDeprecationWarning)
-        context_x, context_y = _handle_batch_input_dimensionality(context_x, context_y)
-        test_x = _handle_batch_input_dimensionality(test_x)
+        context_x, context_y = handle_batch_input_dimensionality(context_x, context_y)
+        test_x = handle_batch_input_dimensionality(test_x)
         assert test_x.shape[1] == context_x.shape[1]
 
         # normalize data
@@ -288,9 +287,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         test_x = self._normalize_data(test_x, None)
 
         # note that we use the empty_state because that corresponds to no data, by construction
-        self._rds, fit_key = jax.random.split(self._rds)
+        self._rng, fit_key = jax.random.split(self._rng)
         _, fitted_state = self._apply_fns.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
-        self._rds, pred_key =  jax.random.split(self._rds)
+        self._rng, pred_key =  jax.random.split(self._rng)
         pred_dist, state = self._apply_fns.base_learner_predict(self.params, fitted_state, pred_key, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                              normalization_std=self.y_std)
@@ -304,16 +303,16 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
-        self._rds, fitkey = self._rds.split()
+        self._rng, fitkey = self._rng.split()
         self._apply_fns.base_learner_fit(self.params,
                                          fitkey,
                                          self.xs_data, self.ys_data)
 
 
-    def predict(self, test_x, return_density=False):
-        test_x = _handle_batch_input_dimensionality(test_x)
-        test_x = self.normalize_data(test_x)
-        pred_dist = self._apply_fns.base_learner_predict(self._updater_state['params'], self._rds, test_x)
+    def predict(self, test_x, return_density=False, **kwargs):
+        test_x = handle_batch_input_dimensionality(test_x)
+        test_x = self._normalize_data(test_x)
+        pred_dist = self._apply_fns.base_learner_predict(self._updater_state['params'], self._rng, test_x)
 
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                               normalization_std=self.y_std)
@@ -324,38 +323,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             pred_mean = pred_dist_transformed.mean
             pred_std = pred_dist_transformed.stddev
             return pred_mean, pred_std
-
-    def _prepare_meta_train_tasks(self, meta_train_tuples, flatten_y=True):
-        self._check_meta_data_shapes(meta_train_tuples)
-        if self._normalization_stats is None:
-            self._compute_meta_normalization_stats(meta_train_tuples)
-        else:
-            self._set_normalization_stats(self._normalization_stats)
-
-        if not self.fitted:
-            self._rds, init_rng = jax.random.split(self._rds) # random numbers
-            self.params, self.empty_state = self._init_fn(init_rng, meta_train_tuples[0][0]) # prior parameters, initial state
-            self.opt_state = self.optimizer.init(self.params)  # optimizer on the prior params
-
-
-
-        task_dicts = []
-
-        for xs,ys in meta_train_tuples:
-            # state of a gp can encapsulate caches of already fitted data and hopefully speed up inference
-            _, state = self._apply_fns.base_learner_fit(self.params, self.empty_state, self._rds, xs, ys)
-            task_dict = {
-                'xs_train': xs,
-                'ys_train': ys,
-                'hk_state': state
-            }
-
-            if flatten_y:
-                task_dict['ys_train'] = ys.flatten()
-
-            task_dicts.append(task_dict)
-
-        return task_dicts
 
 
 

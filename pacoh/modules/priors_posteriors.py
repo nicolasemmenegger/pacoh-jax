@@ -87,13 +87,13 @@ class GaussianBelief:
     @staticmethod
     def rsample_multiple(parameters: Tree, key: jax.random.PRNGKey, num_samples: int):
         """
-        samples according to a tree of Gaussianbeliefstates
+        samples according to a tree of Gaussianbeliefstates, which could be for instance a dictionary or a list of models
         """
-        flattened, treedef = jax.tree_util.tree_flatten(parameters.mean, lambda p: isinstance(p, GaussianBeliefState))
-        keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(parameters.mean),
-                                                 jax.random.split(key, len(flattened))) # keys tree corresponding to the structure of the top_level tree of BeliefStates
-        return jax.tree_multimap(partial(GaussianBelief.rsample, num_samples=num_samples), parameters, keys_tree,
-                                 is_leaf=lambda p, _: isinstance(p, GaussianBeliefState))
+        flattened, treedef = jax.tree_util.tree_flatten(parameters, lambda p: isinstance(p, GaussianBeliefState))
+        keys_tree = jax.tree_util.tree_unflatten(treedef,
+                                                 jax.random.split(key, len(flattened))) # keys tree corresponding to the structure of the top_level tree of BeliefStates, i.e. one per model
+        return jax.tree_multimap(jax.tree_util.Partial(GaussianBelief.rsample, num_samples=num_samples), parameters, keys_tree,
+                                 is_leaf=lambda p: isinstance(p, GaussianBeliefState))
 
     @staticmethod
     def log_prob(parameters: GaussianBeliefState, samples: Tree):

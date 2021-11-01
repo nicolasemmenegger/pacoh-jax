@@ -2,27 +2,19 @@ import warnings
 
 import jax
 import numpy as np
-import numpyro
 import optax
-import tensorflow as tf
 from jax import numpy as jnp
+from tqdm import trange
 
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.vanilla_bnn_vi import get_pure_batched_nn_functions
-from pacoh.modules.abstract import RegressionModel
+from pacoh.models.regression_base import RegressionModel
+from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
 from pacoh.modules.kernels import pytree_rbf_set
 from pacoh.modules.priors_posteriors import GaussianBeliefState, GaussianBelief
 from pacoh.modules.pure_functions import get_pure_batched_likelihood_functions
-from pacoh.util.data_handling import _handle_batch_input_dimensionality
-from pacoh.util.tree import stack_distributions
-from pacoh.util.initialization import initialize_model, initialize_batched_model
-
-
-def get_mixture(pred_dists, n):
-    pred_dists = stack_distributions(pred_dists)
-    mixture_weights = numpyro.distributions.Categorical(probs=jnp.ones((n,)) / n)
-    return numpyro.distributions.MixtureSameFamily(mixture_weights, pred_dists)
-
+from pacoh.util.data_handling import handle_batch_input_dimensionality
+from pacoh.util.initialization import initialize_batched_model
 
 
 class BayesianNeuralNetworkSVGD(RegressionModel):
@@ -34,27 +26,26 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
                  likelihood_prior_mean=jnp.log(0.1), likelihood_prior_std=1.0,
                  n_particles=10, batch_size=8, bandwidth=100., lr=1e-3, sqrt_mode=False, meta_learned_prior=None, normalization_stats=None):
 
-        super().__init__(input_dim, random_state, normalize_data)
-        self.output_dim = output_dim
+        super().__init__(input_dim, output_dim, normalize_data, normalization_stats, random_state)
         self.prior_weight = prior_weight
         self.likelihood_std = likelihood_std
         self.batch_size = batch_size
         self.n_particles = n_particles
-        self.sqrt_mode = sqrt_mode  # TODO ask Jonas what this is?
+        self.sqrt_mode = sqrt_mode
         self.learn_likelihood = learn_likelihood
 
         if not learn_likelihood:
             raise NotImplementedError("the learn_likelihood flag = False is not supported yet")
 
 
-        """ A) Get batched forward functions for the nn and likelihood"""
-        self._rds, *init_keys = jax.random.split(self._rds, self.n_particles + 1)
+        """ A) Get batched forward functions for the nn and likelihood """
+        self._rng, nn_init_key, lh_init_key = jax.random.split(self._rng, 3)
         batched_nn_init, self.batched_nn_apply_fn, _ = get_pure_batched_nn_functions(output_dim,hidden_layer_sizes, activation)
         lh_init, self.lh_apply_shared, self.lh_apply_broadcast = get_pure_batched_likelihood_functions(likelihood_prior_mean)
 
         """ B) Get pytrees with parameters for stacked models """
-        nn_params, nn_params_template = initialize_batched_model(batched_nn_init, (self.batch_size, input_dim), self.n_particles) # batched_nn_init_fn(init_keys, nn_input)
-        likelihood_params, likelihood_params_template = initialize_model(lh_init, (output_dim,), self.n_particles)
+        nn_params, nn_params_template = initialize_batched_model(batched_nn_init, self.n_particles, nn_init_key, (self.batch_size, input_dim))
+        likelihood_params, likelihood_params_template = initialize_batched_model(lh_init, self.n_particles, lh_init_key, (output_dim,))
 
         """ C) setup prior module """
         if meta_learned_prior is None:
@@ -76,7 +67,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
             self.meta_learned_prior_mode = True
 
         """ D) Sample initial particles of the posterior mixture """
-        self._rds, sample_key = jax.random.split(self._rds)
+        self._rng, sample_key = jax.random.split(self._rng)
         self.particles = GaussianBelief.rsample_multiple(self.prior, sample_key, n_particles)
 
         warnings.warn("the option to not learn the likelihood is currently not supported")
@@ -122,13 +113,30 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         self.svgd = SVGD(target_log_prob_batched, kernel_fwd, self.optimizer, self.optimizer_state)
 
     def _recompute_posterior(self):
-        raise NotImplementedError()
+        pass
 
-    def predict(self, xs):
+    def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
+        train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
+        loss_list = []
+        pbar = trange(num_iter_fit)
+        for i in pbar:
+            x_batch, y_batch = next(train_batch_sampler)
+            loss = self.step(x_batch, jnp.expand_dims(y_batch, axis=-1))
+            loss_list.append(loss)
+
+            if i % log_period == 0:
+                loss = jnp.mean(jnp.array(loss_list))
+                loss_list = []
+                message = dict(loss=loss)
+                # if x_val is not None and y_val is not None:
+                #     metric_dict = self.eval(x_val, y_val)
+                #     message.update(metric_dict)
+                pbar.set_postfix(message)
+
+    def predict(self, xs, return_density=False, **kwargs):
         # a) data handling
-        xs = _handle_batch_input_dimensionality(xs)
-        warnings.warn("normalize")
-        # xs = self._normalize_data(xs)
+        xs = handle_batch_input_dimensionality(xs)
+        xs = self._normalize_data(xs)
 
         # b) nn prediction
         ys_pred = self.batched_nn_apply_fn(self.particles['nn'], None, xs)
@@ -137,13 +145,20 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
 
 
         # c) normalization
+        pred_mixture_transformed = AffineTransformedDistribution(pred_mixture,
+                                                                 normalization_mean=self.y_mean,
+                                                                 normalization_std=self.y_std)
         # ys_pred = self._unnormalize_preds(ys_pred)  # should that be some kind of mean??
         # pred_dist = self._unnormalize_predictive_dist(pred_mixture)
 
-        return jnp.mean(ys_pred, axis=0), pred_mixture
+        if return_density:
+            return pred_mixture_transformed
+        else:
+            return pred_mixture_transformed.mean, pred_mixture_transformed.stddev
 
     def step(self, x_batch, y_batch):
         self.svgd.step(self.particles, x_batch, y_batch)
+
 
 
 # if __name__ == '__main__':

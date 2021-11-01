@@ -1,21 +1,21 @@
 import functools
-import warnings
 from typing import Callable, Dict
 
 import jax
 import numpy as np
-import numpyro.distributions
 import optax
 from jax import numpy as jnp
 from tqdm import trange
 
-from pacoh.modules.abstract import RegressionModel
-from pacoh.modules.distributions import AffineTransformedDistribution
-from pacoh.modules.pure_functions import LikelihoodInterface, get_pure_batched_likelihood_functions, \
+from pacoh.models.regression_base import RegressionModel
+from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
+from pacoh.modules.pure_functions import get_pure_batched_likelihood_functions, \
     get_pure_batched_nn_functions
+from pacoh.modules.pure_interfaces import LikelihoodInterface
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
-from pacoh.util.tree import pytree_unstack, Tree, broadcast_params, pytree_shape, stack_distributions
-from pacoh.util.data_handling import _handle_batch_input_dimensionality, Sampler
+from pacoh.util.initialization import initialize_batched_model
+from pacoh.util.tree import pytree_unstack, Tree, broadcast_params
+from pacoh.util.data_handling import handle_batch_input_dimensionality
 
 def neg_elbo(posterior: Dict[str, GaussianBeliefState],
              key: jax.random.PRNGKey,
@@ -63,7 +63,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
 
     # kl computation (regularization)
     kl_divergence = GaussianBelief.log_prob(posterior['nn'], nn_params_batch) \
-                    - GaussianBelief.log_prob(prior['nn'], nn_params_batch) #  (batch_size_vi,)
+                    - GaussianBelief.log_prob(prior['nn'], nn_params_batch)  # (batch_size_vi,)
 
     avg_kl_divergence = jnp.mean(kl_divergence)
 
@@ -102,7 +102,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param batch_size: The number of data points you get while training and predicting
         :param lr: The learning rate to use with the ELBO gradients
         """
-        super().__init__(input_dim, normalize_data, random_state)
+        super().__init__(input_dim, normalize_data, normalization_stats, random_state)
         self.output_dim = output_dim
         self.prior_weight = prior_weight
         self.likelihood_std = likelihood_std
@@ -111,8 +111,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self._set_normalization_stats(normalization_stats)
 
         """ A) Get batched forward functions for the nn and likelihood"""
-        keys = jax.random.split(self._rds, self.batch_size_vi + 1)
-        self._rds = keys[0]
+        keys = jax.random.split(self._rng, self.batch_size_vi + 1)
+        self._rng = keys[0]
         init_keys = keys[1:]
         batched_nn_init_fn, self.batched_nn_apply_fn, _ = get_pure_batched_nn_functions(output_dim,
                                                                                         hidden_layer_sizes,
@@ -120,14 +120,9 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         batched_likelihood_init_fn, self.batched_likelihood_apply_fns, self.batched_likelihood_apply_fns_batch_inputs = get_pure_batched_likelihood_functions(likelihood_prior_mean)
 
-        """ B) Get dummy pytrees for the different module parameters => TODO somehow abstract this inside some utils. """
-        nn_input = jnp.zeros((self.batch_size_vi, self.batch_size, input_dim))
-        nn_params = batched_nn_init_fn(init_keys, nn_input)
-        nn_param_template = pytree_unstack(nn_params)[0]  # just care about the form of the first models params
-
-        likelihood_input = jnp.zeros((self.batch_size_vi, output_dim))
-        likelihood_params = batched_likelihood_init_fn(init_keys, likelihood_input)
-        likelihood_param_template = pytree_unstack(likelihood_params)[0]
+        """ B) Initialize the parameters of the nns and likelihoods """
+        nn_params, nn_param_template = initialize_batched_model(batched_nn_init_fn, nn_key, (self.batch_size, input_dim))
+        likelihood_params, likelihood_params_template = initialize_batched_model(batched_likelihood_init_fn, lh_key, (self.batch_size, output_dim))
 
         """ C) Setup prior and posterior modules """
         nn_prior_state = GaussianBeliefState.initialize(0.0, prior_std, nn_param_template)
@@ -172,8 +167,6 @@ class BayesianNeuralNetworkVI(RegressionModel):
         # TODO ask Jonas what about recomputing the posterior -> start from scratch?  Not in an online setting I suppose
         pass
 
-    """ TODO: this could be put in the base class maybe?"""
-
     def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
         train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
         loss_list = []
@@ -192,28 +185,13 @@ class BayesianNeuralNetworkVI(RegressionModel):
                 #     message.update(metric_dict)
                 pbar.set_postfix(message)
 
-    def _get_batch_sampler(self, xs, ys, batch_size):
-        # iterator that shuffles and repeats the data
-        xs, ys = _handle_batch_input_dimensionality(xs, ys)
-        num_train_points = xs.shape[0]
-
-        if batch_size == -1:
-            batch_size = num_train_points
-        elif batch_size > 0:
-            pass
-        else:
-            raise AssertionError('batch size must be either positive or -1')
-
-        self._rds, sampler_key = jax.random.split(self._rds)
-        return Sampler(xs, ys, batch_size, sampler_key)
-
     def predict(self, xs, num_posterior_samples=20, return_density=True):
         # a) data handling
-        xs = _handle_batch_input_dimensionality(xs)
+        xs = handle_batch_input_dimensionality(xs)
         xs = self._normalize_data(xs)
 
         # b) nn prediction
-        self._rds, nn_key, lh_key = jax.random.split(self._rds, 3)
+        self._rng, nn_key, lh_key = jax.random.split(self._rng, 3)
 
         nn_params = GaussianBelief.rsample(self.posterior['nn'], nn_key, num_posterior_samples)
         ys_pred = self.batched_nn(nn_params, None, xs)
@@ -224,13 +202,14 @@ class BayesianNeuralNetworkVI(RegressionModel):
             lh_params = broadcast_params(pytree_unstack(self.fixed_likelihood_params, 1)[0], num_posterior_samples)
 
         pred_dists = self.batched_likelihood_apply_fns_batch_inputs.get_posterior_from_means(lh_params, None, ys_pred)
-        # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
-        pred_dists = stack_distributions(pred_dists)
-
-
-        mixture = numpyro.distributions.Categorical(probs=jnp.ones((num_posterior_samples,)) / num_posterior_samples)
-
-        pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
+        pred_mixture = get_mixture(pred_dists, self.batch_size_vi)
+        # # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
+        # pred_dists = stack_distributions(pred_dists)
+        # 
+        # 
+        # mixture = numpyro.distributions.Categorical(probs=jnp.ones((num_posterior_samples,)) / num_posterior_samples)
+        # 
+        # pred_mixture = numpyro.distributions.MixtureSameFamily(mixture, pred_dists)
 
         pred_mixture_transformed = AffineTransformedDistribution(pred_mixture,
                                                                  normalization_mean=self.y_mean,
@@ -240,16 +219,13 @@ class BayesianNeuralNetworkVI(RegressionModel):
         else:
             return pred_mixture_transformed.mean, pred_mixture_transformed.stddev
 
-
-
     def _step(self, x_batch, y_batch):
-        self._rds, step_key = jax.random.split(self._rds)
+        self._rng, step_key = jax.random.split(self._rng)
         nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
         self.optimizer_state = new_opt_state
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
-
 
 if __name__ == '__main__':
     np.random.seed(1)
@@ -334,4 +310,4 @@ if __name__ == '__main__':
 #             nn.plot_predictions(x_plot, iteration=(i + 1) * n_iter_fit, experiment="bnn_svgd", show=True)
 #
 #
-# i
+#

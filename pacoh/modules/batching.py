@@ -8,21 +8,20 @@ import haiku as hk
 
 from pacoh.models.pacoh_map_gp import BaseLearnerInterface
 from pacoh.modules.distributions import JAXGaussianLikelihood
-from pacoh.modules.gp_lib import JAXExactGP
+from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel
 
 
 def get_batched_module(transformed: Union[Transformed, MultiTransformed, TransformedWithState, MultiTransformedWithState],
                        num_data_args: Optional[Union[int, Dict[str, int]]]):
     """ Takes an init function and either a single apply funciton or a tuple thereof, and returns
-        batched module versions of them. This means it initialises a number of models in paralels
+        batched module versions of them. This means it initialises a number of models in parallel
         Args:
             transformed: on of Transformed, MultiTransformed, TransformedWithState, MultiTransformedWithState returned
                 by haiku
             multi: whether we get a MultiTransformed instance
             num_data_args:  a dictionary that specifies how many data arguments each of the apply functions have.
                 The transformed.init function is curerntly constrained to be of type (keys, data)
-            # TODO implement or remove exclude: a list of names of functions that should not be batched, and returned as they are
         Returns:
             init_batched: ([keys], data) -> [params]
             apply_batched: ([params], [keys], data) -> [Any]
@@ -48,9 +47,7 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
        """
 
     """batched.init returns a batch of model parameters, which is why it takes n different random keys"""
-    # unpack first argument
     multi = isinstance(transformed, MultiTransformed) or isinstance(transformed, MultiTransformedWithState)
-    # assert not (!multi and len(exclude) > 0), "using the exclude argument with a single transform makes no sense and is not supported"
     with_state = isinstance(transformed, TransformedWithState) or isinstance(transformed, MultiTransformedWithState)
     init_fn, apply_fns = transformed
     if num_data_args is None:
@@ -71,7 +68,7 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
                 data_in_axes[key] = (None,)*val
                 data_in_axes_batched[key] = (0,)*val
 
-    batched_init = vmap(init_fn, in_axes=(0, None))
+    batched_init = vmap(init_fn, in_axes=(0, None))  # vmap along the rng dimension
     base_in_axes = (0, 0, 0) if with_state else (0, 0)
 
     if not multi:
@@ -83,13 +80,13 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
         # there are multiple apply functions (see also hk.multi_transform and hk.multi_transform_with_state)
         apply_dict = {}
         apply_dict_batched_inputs = {}
-        for fname, func in apply_fns._asdict().items():
+        for fname, func in apply_fns._asdict().items(): # TODO is there a public interface to this
             apply_dict[fname] = vmap(func, in_axes=base_in_axes + data_in_axes[fname])
-            apply_dict_batched_inputs[fname]  = vmap(func, in_axes=base_in_axes + data_in_axes_batched[fname])
+            apply_dict_batched_inputs[fname] = vmap(func, in_axes=base_in_axes + data_in_axes_batched[fname])
 
         return batched_init, apply_fns.__class__(**apply_dict), apply_fns.__class__(**apply_dict_batched_inputs)
 
-""" ---- Decorators ----- """
+
 def _transform_batch_base(constructor_fn, purify_fn=hk.transform, num_data_args=None):
     """ Decorates a factory which returns the argument to one of the haiku transforms, depending on whether multi
     and with state are true or false """
@@ -104,7 +101,6 @@ multi_transform_and_batch_module = functools.partial(_transform_batch_base, puri
 multi_transform_and_batch_module_with_state = functools.partial(_transform_batch_base, purify_fn=hk.multi_transform_with_state)
 
 
-""" ------ Testing code ------- """
 if __name__ == "__main__":
     # config.update("jax_debug_nans", True)
     # config.update('jax_disable_jit', True)
@@ -129,6 +125,7 @@ if __name__ == "__main__":
                                                               base_learner_predict=base_learner.pred_dist,
                                                               base_learner_mll_estimator=base_learner.marginal_ll)
         return factory
+
 
     print("TESTING transform and batch")
 
@@ -172,6 +169,4 @@ if __name__ == "__main__":
     output, state = gpapplys.base_learner_predict(params, state, init_keys, xslarge)
 
     print("It's very nice, because I get the output of 3 gps here: POSTERIOR\n", output.loc)
-
-
 

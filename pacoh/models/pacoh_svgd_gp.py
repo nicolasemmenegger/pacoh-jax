@@ -1,30 +1,26 @@
-import functools
 import time
 import warnings
-from typing import Callable, NamedTuple, Tuple, Collection, Union
+from typing import Callable, Collection, Union
 
-import haiku as hk
 import jax.random
 import numpy as np
-import numpyro.distributions
 import optax
 import torch
 from absl import logging
 from jax import numpy as jnp
 
 from pacoh.algorithms.svgd import SVGD
-from pacoh.modules.abstract import RegressionModelMetaLearned
+from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
-from pacoh.util.data_handling import Statistics, _handle_batch_input_dimensionality
-from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
-from pacoh.modules.gp_lib import JAXExactGP, JAXMean, JAXConstantMean, JAXZeroMean
-from pacoh.modules.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel, pytree_rbf_set
-from pacoh.util.initialization import initialize_batched_model, initialize_model
+from pacoh.util.data_handling import Statistics, handle_batch_input_dimensionality
+from pacoh.modules.distributions import AffineTransformedDistribution
+from pacoh.modules.means import JAXMean
+from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
+from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import pytrees_stack
 
 from pacoh_map_gp import construct_pacoh_map_forward_fns
-from pacoh_map_gp import BaseLearnerInterface
-from pacoh.modules.batched_modules import multi_transform_and_batch_module_with_state
+from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 
 # this is all there is to it
 construct_pacoh_svgd_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns)
@@ -72,7 +68,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         :param normalization_stats:
         :param random_seed:
         """
-        super().__init__(normalize_data, random_seed)
+        super().__init__(input_dim, output_dim, normalize_data, normalization_stats, random_seed)
 
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
@@ -104,6 +100,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             kernel_fwd = lambda particles: pytree_rbf_set(particles, particles, length_scale=svgd_kernel_bandwidth, output_scale=1.0)
         else:
             raise NotImplementedError("IMQ and other options not yet supported")
+
         # elif kernel == 'IMQ':
         #     self.kernel = IMQSteinKernel(bandwidth=bandwidth)
         # else:
@@ -130,7 +127,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         # then draw n priors
         self.particles = None
 
-        self._rds, *init_keys = jax.random.split(self._rds, self.num_particles + 1)
+        self._rng, *init_keys = jax.random.split(self._rng, self.num_particles + 1)
 
         """ B) Get pytrees with parameters for stacked models """
         _, base_model_params_template = initialize_batched_model(self._init_fn, (self.batch_size, input_dim), self.num_particles)  # batched_nn_init_fn(init_keys, nn_input)
@@ -142,7 +139,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self.hyperprior = GaussianBeliefState.initialize(0.0, bias_prior_std+weight_prior_std, base_model_params_template)
 
         """ D) Sample initial particles of the hyperposterior mixture """
-        self._rds, sample_key = jax.random.split(self._rds)
+        self._rng, sample_key = jax.random.split(self._rng)
         self.particles = GaussianBelief.rsample_multiple(self.hyperprior, sample_key, num_particles)
 
 
@@ -197,14 +194,14 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
         for itr in range(1, n_iter + 1):
             print(itr)
             # a) choose a minibatch. TODO: make this more elegant
-            self._rds, choice_key = jax.random.split(self._rds)
+            self._rng, choice_key = jax.random.split(self._rng)
             batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
             batch = [task_dicts[i] for i in batch_indices]
             batched_xs = jnp.array([task['xs_train'] for task in batch])
             batched_ys = jnp.array([task['ys_train'] for task in batch])
             batched_states = pytrees_stack([task['hk_state'] for task in batch])
-            apply_rngs = jax.random.split(self._rds, 1+self.task_batch_size)
-            self._rds = apply_rngs[0]
+            apply_rngs = jax.random.split(self._rng, 1+self.task_batch_size)
+            self._rng = apply_rngs[0]
             apply_rngs = apply_rngs[1:]
 
             # b) get value and gradient
@@ -263,8 +260,8 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
             (pred_mean, pred_std) predicted mean and standard deviation corresponding to p(t|test_x, test_context_x, context_y)
         """
         warnings.warn("I would suggest that meta_predict be deprecated in favor of separate fit and predict methods, no?", PendingDeprecationWarning)
-        context_x, context_y = _handle_batch_input_dimensionality(context_x, context_y)
-        test_x = _handle_batch_input_dimensionality(test_x)
+        context_x, context_y = handle_batch_input_dimensionality(context_x, context_y)
+        test_x = handle_batch_input_dimensionality(test_x)
         assert test_x.shape[1] == context_x.shape[1]
 
         # normalize data
@@ -272,9 +269,9 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
         test_x = self._normalize_data(test_x, None)
 
         # note that we use the empty_state because that corresponds to no data, by construction
-        self._rds, fit_key = jax.random.split(self._rds)
+        self._rng, fit_key = jax.random.split(self._rng)
         _, fitted_state = self._apply_fns.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
-        self._rds, pred_key =  jax.random.split(self._rds)
+        self._rng, pred_key =  jax.random.split(self._rng)
         pred_dist, state = self._apply_fns.base_learner_predict(self.params, fitted_state, pred_key, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                              normalization_std=self.y_std)
@@ -288,7 +285,7 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
-        self._rds, fitkey = self._rds.split()
+        self._rng, fitkey = self._rng.split()
         self._apply_fns.base_learner_fit(self.params,
                                          fitkey,
                                          self.xs_data, self.ys_data)
@@ -297,7 +294,7 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
     # def predict(self, test_x, return_density=False):
     #     test_x = _handle_batch_input_dimensionality(test_x)
     #     test_x = self.normalize_data(test_x)
-    #     pred_dist = self._apply_fns.base_learner_predict(self._updater_state['params'], self._rds, test_x)
+    #     pred_dist = self._apply_fns.base_learner_predict(self._updater_state['params'], self._rng, test_x)
     #
     #     pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
     #                                                           normalization_std=self.y_std)
@@ -317,7 +314,7 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
     #         self._set_normalization_stats(self._normalization_stats)
     #
     #     if not self.fitted:
-    #         self._rds, init_rng = jax.random.split(self._rds) # random numbers
+    #         self._rng, init_rng = jax.random.split(self._rng) # random numbers
     #         self.params, self.empty_state = self._init_fn(init_rng, meta_train_tuples[0][0]) # prior parameters, initial state
     #         self.opt_state = self.optimizer.init(self.params)  # optimizer on the prior params
     #
@@ -327,7 +324,7 @@ def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_
     #
     #     for xs,ys in meta_train_tuples:
     #         # state of a gp can encapsulate caches of already fitted data and hopefully speed up inference
-    #         _, state = self._apply_fns.base_learner_fit(self.params, self.empty_state, self._rds, xs, ys)
+    #         _, state = self._apply_fns.base_learner_fit(self.params, self.empty_state, self._rng, xs, ys)
     #         task_dict = {
     #             'xs_train': xs,
     #             'ys_train': ys,

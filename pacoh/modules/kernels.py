@@ -10,8 +10,10 @@ from pacoh.util.tree import pytree_sum
 def rbf_cov(x1, x2, ls_param, os_param):
     return os_param() * jnp.exp(-0.5 * (jnp.sum(jax.lax.square(x1 - x2))) / (ls_param() ** 2))
 
+
 class JAXKernel(hk.Module):
     pass
+
 
 class JAXRBFKernel(JAXKernel):
     def __init__(self,
