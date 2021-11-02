@@ -3,22 +3,25 @@ import scipy.stats
 
 
 def calib_error(pred_dist_vectorized, test_ys):
+    """ Both inputs should be 2 dimensional. """
     cdf_vals = pred_dist_vectorized.cdf(test_ys)
+    assert cdf_vals.shape[-1] == 1 and cdf_vals.ndim == 2
+    num_points = test_ys.shape[0]
+    conf_levels = np.linspace(0.05, 1.0, 20)
+    conf_levels = np.expand_dims(conf_levels, axis=0)
 
-    if test_t_tensor.shape[0] == 1:
-        test_t_tensor = test_ys.flatten()
-        cdf_vals = cdf_vals.flatten()
+    compare_matrix = cdf_vals <= conf_levels
+    # compare_matrix[point, quantile] will be true if the model thinks the probability of f(point_x) <= point_y is smaller than quantily
+    emp_freq_per_conf_level = np.sum(compare_matrix, axis=0) / num_points
+    # emp_freq_per_confidence_level[quantile] The probability that the model predicts a probability lower than the qth quantile
+    # under the empirical distribution
 
-    num_points = test_t_tensor.shape[0]
-    conf_levels = torch.linspace(0.05, 1.0, 20)
-    emp_freq_per_conf_level = torch.sum(cdf_vals[:, None] <= conf_levels, dim=0).float() / num_points
-
-    calib_rmse = torch.sqrt(torch.mean((emp_freq_per_conf_level - conf_levels)**2))
+    calib_rmse = np.sqrt(np.mean((emp_freq_per_conf_level - conf_levels)**2))
     return calib_rmse
 
 
 def calib_error_chi2(pred_dist_vectorized, test_t_tensor):
-    import scipy.stats
+    return 0.0
     z2 = (((pred_dist_vectorized.mean - test_t_tensor) / pred_dist_vectorized.stddev) ** 2).detach().numpy()
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
     conf_levels = np.linspace(0.05, 1, 20)

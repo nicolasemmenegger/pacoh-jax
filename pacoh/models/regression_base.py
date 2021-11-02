@@ -1,24 +1,16 @@
-import warnings
-from typing import Union
-
 import numpy as np
-from numpyro.distributions import Normal
-
-import pacoh.util.evaluation
-from pacoh.util.data_handling import handle_batch_input_dimensionality, handle_point_input_dimensionality, Sampler, \
-    DataNormalizer
-
 import jax
 from jax import numpy as jnp
 from abc import ABC, abstractmethod
 
+
+from pacoh.util.data_handling import handle_batch_input_dimensionality, Sampler, DataNormalizer
 from pacoh.util.evaluation import calib_error, calib_error_chi2
 
 
 class RegressionModel(ABC):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None,
-                 flatten_ys: bool = False):
+                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
         """
         Abstracts the boilerplate functionality of a Regression Model. This includes data normalization,
         fitting and inference
@@ -37,42 +29,19 @@ class RegressionModel(ABC):
                 _recompute_posterior(): A method that is called after adding data points
                 predict(xs): target prediction
         """
-        assert not flatten_ys or output_dim == 1, "Cannot flatten the labels if the output is multivariate"
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.xs_data = jnp.zeros((0, input_dim))
-        self.flatten_ys = flatten_ys
-        if flatten_ys:
-            self.ys_data = jnp.zeros((0,))
-        else:
-            self.ys_data = jnp.zeros((0, output_dim))
+        self.ys_data = jnp.zeros((0, output_dim))
 
         self._num_train_points = 0
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
         if normalizer is None:
-            self._normalizer = DataNormalizer(input_dim, output_dim, flatten_ys, normalize_data)
+            self._normalizer = DataNormalizer(input_dim, output_dim, normalize_data)
         else:
             self._normalizer = normalizer
             assert normalizer.turn_off_normalization == (not normalize_data), "instructions unclear, normalize"
-            assert flatten_ys == normalizer.flatten_ys, """instructions unclear, normalizer told to flatten ys,
-                                                              but RegressionModel not"""
             assert output_dim == normalizer.output_dim and input_dim == normalizer.input_dim, """Dimensions not matching"""
-
-    def add_data(self, xs: np.ndarray, ys: Union[float, np.ndarray], refit: bool = True):
-        """
-        A method to either add a single data point or a batch of datapoints
-        to the model
-        Args:
-            xs: the feature(s)
-            ys: the label(s)
-            refit: whether to refit the posterior or not
-        Notes:
-            The more explicit add_data_point and add_data_points are preferred
-        """
-        if isinstance(ys, float) or ys.size == 1:
-            self.add_data_point(xs, ys, refit)
-        else:
-            self.add_data_points(xs, ys, refit)
 
     def add_data_points(self, xs: np.ndarray, ys: np.ndarray, refit: bool = True):
         """
@@ -82,7 +51,9 @@ class RegressionModel(ABC):
             ys: the corresponding observations, of shape (num_data) or (num_data, 1)
             refit: whether to refit the posterior or not
         """
-        assert xs.ndim == 2 and xs.shape[1] == self.input_dim
+        xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
+        assert xs.ndim == 2 and xs.shape[1] == self.input_dim, "Something is wrong with your data"
+        assert ys.ndim == 2 and ys.shape[1] == self.output_dim, "Something is wrong with your data"
         # handle input dimensionality and normalize data
         xs, ys = self._normalizer.handle_data(xs, ys)
 
@@ -91,8 +62,7 @@ class RegressionModel(ABC):
         self.ys_data = np.concatenate([self.ys_data, ys])
         self._num_train_points += ys.shape[0]
 
-        assert self.xs_data.shape[0] == self.ys_data.shape[0]
-        assert self._num_train_points == 1 or self.xs_data.shape[0] == self._num_train_points
+        assert self.xs_data.shape[0] == self.ys_data.shape[0] == self._num_train_points
 
         if refit:
             self._recompute_posterior()
@@ -105,8 +75,8 @@ class RegressionModel(ABC):
             y: float or of shape (1) or of shape (1,1)
             refit: whether to refit the posterior or not
         """
-        x, y = handle_point_input_dimensionality(x, y)
         xs, ys = np.expand_dims(x, axis=0), np.expand_dims(y, axis=0)
+        xs, ys = handle_batch_input_dimensionality(xs, ys)
         self.add_data_points(xs, ys, refit)
 
 
@@ -123,12 +93,12 @@ class RegressionModel(ABC):
         """
         test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
         pred_dist = self.predict(test_xs)
-        avg_log_likelihood = pred_dist.log_prob(test_ys) / test_ys.shape[0]
+        avg_log_likelihood = jnp.sum(pred_dist.log_prob(test_ys)) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
         calibr_error = calib_error(pred_dist, test_ys)
         calibr_error_chi2 = calib_error_chi2(pred_dist, test_ys)
 
-        return avg_log_likelihood, rmse, calibr_error, calibr_error_chi2
+        return avg_log_likelihood.item(), rmse.item(), calibr_error.item(), calibr_error_chi2
 
     def confidence_intervals(self, test_x, confidence=0.9):
         pred_dist = self.predict(test_x)

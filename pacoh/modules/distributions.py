@@ -48,8 +48,6 @@ class AffineTransformedDistribution(TransformedDistribution):
 
     @property
     def iid_normal(self):
-        print("mean")
-        print(self.mean)
         return Normal(loc=self.mean, scale=self.stddev)
 
 

@@ -9,40 +9,36 @@ from pacoh.modules.distributions import AffineTransformedDistribution
 
 
 class DataNormalizer:
-    def __init__(self, input_dim, output_dim, flatten_ys=False, normalize_data=True):
+    def __init__(self, input_dim, output_dim, normalize_data=True):
         self.x_mean = jnp.zeros((input_dim,))
         self.x_std = jnp.ones((input_dim,))
 
-        if flatten_ys:
-            self.y_mean = 0.0
-            self.y_std = 1.0
-        else:
-            self.y_mean = jnp.zeros((output_dim,))
-            self.y_std = jnp.ones((output_dim,))
+        self.y_mean = jnp.zeros((output_dim,))
+        self.y_std = jnp.ones((output_dim,))
 
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.flatten_ys = flatten_ys
         self.turn_off_normalization = not normalize_data
 
     @classmethod
-    def from_meta_tuples(cls, meta_train_tuples, flatten_ys=False, normalize_data=True):
+    def from_meta_tuples(cls, meta_train_tuples, normalize_data=True):
         xs_stack, ys_stack = map(list,
                                  zip(*[handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
                                        meta_train_tuples]))
         all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
-
-        return cls.from_dataset(all_xs, all_ys, flatten_ys, normalize_data)
+        return cls.from_dataset(all_xs, all_ys, normalize_data)
 
     @classmethod
-    def from_dataset(cls, xs, ys, flatten_ys=False, normalize_data=True):
+    def from_dataset(cls, xs, ys, normalize_data=True):
         """
         Computes mean and std of the dataset and sets the statistics
         """
+        xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
+        assert xs.ndim == ys.ndim == 2, "Something seems off with your data"
         input_dim = xs.shape[-1]
-        output_dim = 1 if ys.ndim == 1 else ys.shape[-1]
+        output_dim = ys.shape[-1]
 
-        normalizer = cls(input_dim, output_dim, flatten_ys, normalize_data)
+        normalizer = cls(input_dim, output_dim, normalize_data)
         normalizer.x_mean, normalizer.y_mean = jnp.mean(xs, axis=0), jnp.mean(ys, axis=0)
         normalizer.x_std, normalizer.y_std = jnp.std(xs, axis=0) + 1e-8, jnp.std(ys, axis=0) + 1e-8
 
@@ -64,12 +60,12 @@ class DataNormalizer:
         if ys is None:
             return xs_normalized
         else:
-            ys_normalized = (ys - self.y_mean) / self.y_std
+            ys_normalized = (ys - self.y_mean[None, :]) / self.y_std[None, :]
             return xs_normalized, ys_normalized
 
     def handle_data(self, xs, ys=None):
         if ys is not None:
-            xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=self.flatten_ys)
+            xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
             return self.normalize_data(xs, ys)
         else:
             xs = handle_batch_input_dimensionality(xs)
@@ -89,7 +85,6 @@ def normalize_predict(predictfn):
             mean = jnp.zeros_like(self._normalizer.y_mean)
             std = jnp.ones_like(self._normalizer.y_std)
 
-        print("hi",pred_dist.mean)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist,
                                                               normalization_mean=mean,
                                                               normalization_std=std)
@@ -152,7 +147,7 @@ def handle_point_input_dimensionality(self, x, y):
     return x, y
 
 
-def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = True):
+def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = False):
     """
     Takes a dataset S=(xs,ys) and returns it in a uniform fashion. x shall have shape (num_points, input_dim) and
     y shall have size (num_points), that is, we only consider scalar regression targets.

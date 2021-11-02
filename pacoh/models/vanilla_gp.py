@@ -41,7 +41,7 @@ class GPRegressionVanilla(RegressionModel):
             raise NotImplementedError("GPs currently only support univariate mode")
 
         super().__init__(input_dim=input_dim, output_dim=1, normalize_data=normalize_data,
-                         normalizer=normalizer, random_state=random_state, flatten_ys=True)
+                         normalizer=normalizer, random_state=random_state)
         factory = construct_vanilla_gp_forward_fns(input_dim,
                                                    kernel_outputscale,
                                                    kernel_lengthscale,
@@ -109,11 +109,20 @@ if __name__ == "__main__":
     x_data_train, x_data_test = x_data[:n_train_samples].numpy(), x_data[n_train_samples:].numpy()
     y_data_train, y_data_test = y_data[:n_train_samples].numpy(), y_data[n_train_samples:].numpy()
 
-    normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, flatten_ys=True, normalize_data=False)
+    normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, normalize_data=False)
 
 
     gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=normalizer, normalize_data=False)
-    gp.add_data(x_data_train, y_data_train)
+    gp.add_data_points(x_data_train, y_data_train)
+
+
+    res = []
+    for i in range(200):
+        alternate_xs = x_data_test[i:i+1]
+        alternate_ys = y_data_test[i:i+1]
+        res.append(gp.eval(alternate_xs, alternate_ys)[0])
+
+    print(res)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 
