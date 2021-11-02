@@ -12,12 +12,13 @@ import jax
 from jax import numpy as jnp
 from abc import ABC, abstractmethod
 
-from pacoh.util.evaluation import _calib_error, _calib_error_chi2
+from pacoh.util.evaluation import calib_error, calib_error_chi2
 
 
 class RegressionModel(ABC):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
+                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None,
+                 flatten_ys: bool = False):
         """
         Abstracts the boilerplate functionality of a Regression Model. This includes data normalization,
         fitting and inference
@@ -36,17 +37,26 @@ class RegressionModel(ABC):
                 _recompute_posterior(): A method that is called after adding data points
                 predict(xs): target prediction
         """
+        assert not flatten_ys or output_dim == 1, "Cannot flatten the labels if the output is multivariate"
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.normalize_data = normalize_data
-        self.xs_data = jnp.zeros((0, self.input_dim))
-        self.ys_data = jnp.zeros((0,))
+        self.xs_data = jnp.zeros((0, input_dim))
+        self.flatten_ys = flatten_ys
+        if flatten_ys:
+            self.ys_data = jnp.zeros((0,))
+        else:
+            self.ys_data = jnp.zeros((0, output_dim))
+
         self._num_train_points = 0
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
         if normalizer is None:
-            self._normalizer = DataNormalizer(input_dim, output_dim)
+            self._normalizer = DataNormalizer(input_dim, output_dim, flatten_ys, normalize_data)
         else:
             self._normalizer = normalizer
+            assert normalizer.turn_off_normalization == (not normalize_data), "instructions unclear, normalize"
+            assert flatten_ys == normalizer.flatten_ys, """instructions unclear, normalizer told to flatten ys,
+                                                              but RegressionModel not"""
+            assert output_dim == normalizer.output_dim and input_dim == normalizer.input_dim, """Dimensions not matching"""
 
     def add_data(self, xs: np.ndarray, ys: Union[float, np.ndarray], refit: bool = True):
         """
@@ -115,13 +125,13 @@ class RegressionModel(ABC):
         pred_dist = self.predict(test_xs)
         avg_log_likelihood = pred_dist.log_prob(test_ys) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
-        calibr_error = self._calib_error(pred_dist, test_ys)
-        calibr_error_chi2 = _calib_error_chi2(pred_dist, test_ys)
+        calibr_error = calib_error(pred_dist, test_ys)
+        calibr_error_chi2 = calib_error_chi2(pred_dist, test_ys)
 
         return avg_log_likelihood, rmse, calibr_error, calibr_error_chi2
 
     def confidence_intervals(self, test_x, confidence=0.9):
-        pred_dist = self.predict(test_x, return_density=True)
+        pred_dist = self.predict(test_x)
         alpha = (1 - confidence) / 2
         ucb = pred_dist.icdf((1 - alpha)*jnp.ones(pred_dist.batch_shape))
         lcb = pred_dist.icdf(alpha*jnp.ones(pred_dist.batch_shape))

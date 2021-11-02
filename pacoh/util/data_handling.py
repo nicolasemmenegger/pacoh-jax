@@ -5,13 +5,20 @@ from typing import Optional
 import jax
 from jax import numpy as jnp
 
+from pacoh.modules.distributions import AffineTransformedDistribution
+
 
 class DataNormalizer:
     def __init__(self, input_dim, output_dim, flatten_ys=False, normalize_data=True):
         self.x_mean = jnp.zeros((input_dim,))
         self.x_std = jnp.ones((input_dim,))
-        self.y_mean = jnp.zeros((output_dim,))
-        self.y_std = jnp.zeros((input_dim,))
+
+        if flatten_ys:
+            self.y_mean = 0.0
+            self.y_std = 1.0
+        else:
+            self.y_mean = jnp.zeros((output_dim,))
+            self.y_std = jnp.ones((output_dim,))
 
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -44,6 +51,7 @@ class DataNormalizer:
     def normalize_data(self, xs, ys=None):
         """
         Normalizes the data according to the stored statistics and returns the normalized data
+        Assumes the data already has the correct dimensionality.
         """
         if self.turn_off_normalization:
             if ys is None:
@@ -52,7 +60,7 @@ class DataNormalizer:
                 return xs, ys
 
         xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :]
-        
+
         if ys is None:
             return xs_normalized
         else:
@@ -61,11 +69,37 @@ class DataNormalizer:
 
     def handle_data(self, xs, ys=None):
         if ys is not None:
-            xs, ys = handle_batch_input_dimensionality(xs, ys)
+            xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=self.flatten_ys)
             return self.normalize_data(xs, ys)
         else:
             xs = handle_batch_input_dimensionality(xs)
             return self.normalize_data(xs)
+
+
+
+def normalize_predict(predictfn):
+    def normalized_predict(self, test_x, return_density=True):
+        test_x_normalized = self._normalizer.handle_data(test_x)
+        pred_dist = predictfn(self, test_x_normalized)
+
+        if not self._normalizer.turn_off_normalization:
+            mean = self._normalizer.y_mean
+            std = self._normalizer.y_std
+        else:
+            mean = jnp.zeros_like(self._normalizer.y_mean)
+            std = jnp.ones_like(self._normalizer.y_std)
+
+        print("hi",pred_dist.mean)
+        pred_dist_transformed = AffineTransformedDistribution(pred_dist,
+                                                              normalization_mean=mean,
+                                                              normalization_std=std)
+
+        if return_density:
+            return pred_dist_transformed.iid_normal
+        else:
+            return pred_dist_transformed.mean, pred_dist_transformed.stddev
+
+    return normalized_predict
 
 
 class Sampler:

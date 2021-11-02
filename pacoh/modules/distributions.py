@@ -23,7 +23,9 @@ class AffineTransformedDistribution(TransformedDistribution):
     """
 
     def __init__(self, base_dist, normalization_mean, normalization_std):
-        self.norm_scale = normalization_std.reshape((1,)) # so we can apply it on batches
+        self.norm_scale = normalization_std
+        # TODO find out if I broke something here
+        # self.norm_scale = normalization_std.reshape((1,)) # so we can apply it on batches
         normalization_transform = AffineTransform(loc=normalization_mean, scale=normalization_std)
         super().__init__(base_dist, normalization_transform)
 
@@ -46,6 +48,8 @@ class AffineTransformedDistribution(TransformedDistribution):
 
     @property
     def iid_normal(self):
+        print("mean")
+        print(self.mean)
         return Normal(loc=self.mean, scale=self.stddev)
 
 

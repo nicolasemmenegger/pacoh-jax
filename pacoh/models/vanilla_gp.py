@@ -6,13 +6,13 @@ import haiku as hk
 from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.pure_functions import construct_vanilla_gp_forward_fns
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, normalize_predict
 from pacoh.util.initialization import initialize_model
 
 class GPRegressionVanilla(RegressionModel):
     def __init__(self,
                  input_dim: int,
-                 output_dim: int,
+                 output_dim: int = 1,
                  kernel_outputscale: float = 2.0,
                  kernel_lengthscale: float = 1.0,
                  likelihood_variance: float = 0.05,
@@ -37,10 +37,11 @@ class GPRegressionVanilla(RegressionModel):
                 with the
             random_state: A pseudo random number generator key from which to derive further
         """
+        if output_dim > 1:
+            raise NotImplementedError("GPs currently only support univariate mode")
 
-        # Set up the boilerplate RegressionModel
-        super().__init__(input_dim=input_dim, output_dim=output_dim, normalize_data=normalize_data,
-                         normalizer=normalizer, random_state=random_state)
+        super().__init__(input_dim=input_dim, output_dim=1, normalize_data=normalize_data,
+                         normalizer=normalizer, random_state=random_state, flatten_ys=True)
         factory = construct_vanilla_gp_forward_fns(input_dim,
                                                    kernel_outputscale,
                                                    kernel_lengthscale,
@@ -55,33 +56,21 @@ class GPRegressionVanilla(RegressionModel):
         self._prior_params = self._params
         self._prior_state = self._state
 
-
-    # @normalize_data_predict
-    def predict(self, test_x, return_density=False, **kwargs):
+    @normalize_predict
+    def predict(self, test_x):
         """
         computes the predictive distribution of the targets p(t|test_x, train_x, train_y)
 
         Args:
             test_x: (ndarray) query input data of shape (n_samples, ndim_x)
-            return_density (bool) whether to return a density object or
-
-        Returns:
-            (pred_mean, pred_std) predicted mean and standard deviation corresponding to p(y_test|X_test, X_train, y_train)
+            return_density (bool) whether to return a density object or a (mean, std) tuple
 
         Notes:
-            This includes both the epistemic and aleatoric uncertainty
+            The decorator takes care of the mapping into and from the normalized space
         """
-        test_x_normalized = self._normalizer.handle_data(test_x)
         self._rng, predict_key = jax.random.split(self._rng)
-        pred_dist, self._state = self._apply_fns.pred_dist_fn(self._params, self._state, predict_key, test_x_normalized)
-
-        pred_dist_transformed = AffineTransformedDistribution(pred_dist,
-                                                              normalization_mean=self._normalizer.y_mean,
-                                                              normalization_std=self._normalizer.y_std)
-        if return_density:
-            return pred_dist_transformed.iid_normal
-        else:
-            return pred_dist_transformed.mean, pred_dist_transformed.stddev
+        pred_dist, self._state = self._apply_fns.pred_dist_fn(self._params, self._state, predict_key, test_x)
+        return pred_dist
 
     def reset_to_prior(self):
         self._params, self._state = self._prior_params, self._prior_state
@@ -91,17 +80,12 @@ class GPRegressionVanilla(RegressionModel):
         self._rng, fit_key = jax.random.split(self._rng)
         _, self._state = self._apply_fns.fit_fn(self._params, self._state, fit_key, self.xs_data, self.ys_data)
 
-    def _prior(self, xs: jnp.ndarray, return_density=True):
+    @normalize_predict
+    def _prior(self, xs: jnp.ndarray):
         """Returns the prior of the underlying GP for the given datapoints. """
-        self._normalize_data(xs)
         self._rng, predict_key = jax.random.split(self._rng)
         pred_dist, _ = self._apply_fns.pred_dist_fn(self._prior_params, self._prior_state, predict_key, xs)
-
-        pred_dist_transformed = AffineTransformedDistribution(pred_dist,
-                                                              normalization_mean=self.y_mean,
-                                                              normalization_std=self.y_std)
-
-        return pred_dist_transformed
+        return pred_dist
 
 
 
@@ -125,23 +109,23 @@ if __name__ == "__main__":
     x_data_train, x_data_test = x_data[:n_train_samples].numpy(), x_data[n_train_samples:].numpy()
     y_data_train, y_data_test = y_data[:n_train_samples].numpy(), y_data[n_train_samples:].numpy()
 
-    gp = GPRegressionVanilla(input_dim=x_data.shape[-1], output_dim=1)
+    normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, flatten_ys=True, normalize_data=False)
+
+
+    gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=normalizer, normalize_data=False)
     gp.add_data(x_data_train, y_data_train)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 
-    pred_dist = gp.predict(x_plot, return_density=True)
+    pred_dist = gp.predict(x_plot)
     lcb, ucb = gp.confidence_intervals(x_plot, confidence=0.9)
-    # pred_dist = gp._affine_transformed_distribution_to_normal(pred_dist)
     pred_mean, pred_std = pred_dist.mean, pred_dist.scale
-    # lcb, ucb = pred_mean-pred_std, pred_mean + pred_std
-    # lcb, ucb = lcb.flatten(), ucb.flatten()
     plt.plot(x_plot, pred_mean)
     plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.4)
 
     gp.reset_to_prior()
-    pred_mean, _ = gp.predict(x_plot, return_density=False)
-    plt.plot(x_plot, pred_mean)
+    pred_dist = gp.predict(x_plot)
+    plt.plot(x_plot, pred_dist.mean)
 
     plt.scatter(x_data_test, y_data_test)
     plt.scatter(x_data_train, y_data_train)

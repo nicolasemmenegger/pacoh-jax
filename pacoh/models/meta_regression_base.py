@@ -6,7 +6,7 @@ import numpy as np
 import pacoh.util.evaluation
 from config import device
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.evaluation import _calib_error_chi2
+from pacoh.util.evaluation import calib_error_chi2
 from pacoh.util.data_handling import handle_batch_input_dimensionality
 
 
@@ -66,8 +66,8 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             rmse = torch.mean(torch.pow(pred_dist.mean - test_y_tensor, 2)).sqrt()
 
             pred_dist_vect = self._vectorize_pred_dist(pred_dist)
-            calibr_error = pacoh.util.evaluation._calib_error(pred_dist_vect, test_y_tensor)
-            calibr_error_chi2 = _calib_error_chi2(pred_dist_vect, test_y_tensor)
+            calibr_error = pacoh.util.evaluation.calib_error(pred_dist_vect, test_y_tensor)
+            calibr_error_chi2 = calib_error_chi2(pred_dist_vect, test_y_tensor)
 
             return avg_log_likelihood.cpu().item(), rmse.cpu().item(), calibr_error.cpu().item(), calibr_error_chi2
 

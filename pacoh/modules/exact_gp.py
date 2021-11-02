@@ -35,7 +35,6 @@ class JAXExactGP:
         hk.set_state("cholesky", (jnp.zeros((0, 0), dtype=jnp.float32), True))
         return self.likelihood(self._prior(dummy_xs))
 
-
     def _ys_centered(self, xs, ys):
         return ys - self.mean_set(xs).flatten()
 
@@ -53,7 +52,7 @@ class JAXExactGP:
     @functools.partial(hk.vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
         xs = hk.get_state("xs", dtype=jnp.float32)
-        ys = hk.get_state("ys", dtype=jnp.float32)
+        ys = hk.get_state("ys", dtype=jnp.float32).flatten()
         chol = hk.get_state("cholesky", dtype=jnp.float32)
 
         def has_data(operand):
@@ -63,7 +62,7 @@ class JAXExactGP:
             mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve((chol, True), self._ys_centered(xs, ys)))
             var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
             std = jnp.sqrt(var)
-            return numpyro.distributions.Normal(loc=mean, scale=std) # TODO figure out batch_shape and event_shape
+            return numpyro.distributions.Normal(loc=mean, scale=std)
 
         def no_data(operand):
             x, _, __ = operand

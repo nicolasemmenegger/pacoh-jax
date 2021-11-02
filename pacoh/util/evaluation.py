@@ -2,7 +2,7 @@ import numpy as np
 import scipy.stats
 
 
-def _calib_error(pred_dist_vectorized, test_ys):
+def calib_error(pred_dist_vectorized, test_ys):
     cdf_vals = pred_dist_vectorized.cdf(test_ys)
 
     if test_t_tensor.shape[0] == 1:
@@ -17,7 +17,7 @@ def _calib_error(pred_dist_vectorized, test_ys):
     return calib_rmse
 
 
-def _calib_error_chi2(pred_dist_vectorized, test_t_tensor):
+def calib_error_chi2(pred_dist_vectorized, test_t_tensor):
     import scipy.stats
     z2 = (((pred_dist_vectorized.mean - test_t_tensor) / pred_dist_vectorized.stddev) ** 2).detach().numpy()
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
