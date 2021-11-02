@@ -6,6 +6,10 @@ class VanillaGPInterface(NamedTuple):
     pred_dist_fn: Any
     prior_fn: Any
 
+class VanillaBNNVIInterface(NamedTuple):
+    pred_dist: Any
+    log_likelihood: Any
+
 class LikelihoodInterface(NamedTuple):
     log_prob: Any
     get_posterior_from_means: Any

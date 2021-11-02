@@ -10,15 +10,17 @@ from tqdm import trange
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
 from pacoh.modules.pure_functions import get_pure_batched_likelihood_functions, \
-    get_pure_batched_nn_functions
+    get_pure_batched_nn_functions, construct_bnn_vi_forward_fns
 from pacoh.modules.pure_interfaces import LikelihoodInterface
 from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
 from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import pytree_unstack, Tree, broadcast_params
-from pacoh.util.data_handling import handle_batch_input_dimensionality
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
+
 
 def neg_elbo(posterior: Dict[str, GaussianBeliefState],
              key: jax.random.PRNGKey,
+
              x_batch: jnp.array,
              y_batch: jnp.array,
              prior: Dict[str, GaussianBeliefState],
@@ -80,7 +82,7 @@ def neg_elbo(posterior: Dict[str, GaussianBeliefState],
 
 class BayesianNeuralNetworkVI(RegressionModel):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalization_stats: Dict[str, np.array] = None,
+                 normalizer: DataNormalizer = None,
                  random_state: jax.random.PRNGKey = None,
                  hidden_layer_sizes=(32, 32), activation=jax.nn.elu,
                  likelihood_std=0.1, learn_likelihood=True, prior_std=1.0, prior_weight=0.1,
@@ -102,18 +104,17 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param batch_size: The number of data points you get while training and predicting
         :param lr: The learning rate to use with the ELBO gradients
         """
-        super().__init__(input_dim, normalize_data, normalization_stats, random_state)
-        self.output_dim = output_dim
-        self.prior_weight = prior_weight
-        self.likelihood_std = likelihood_std
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
         self.batch_size = batch_size
         self.batch_size_vi = batch_size_vi
-        self._set_normalization_stats(normalization_stats)
 
         """ A) Get batched forward functions for the nn and likelihood"""
-        keys = jax.random.split(self._rng, self.batch_size_vi + 1)
-        self._rng = keys[0]
-        init_keys = keys[1:]
+        self._rng, init_key = jax.random.split(self._rng)
+
+        init, apply, _ = construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation, likelihood_prior_mean, learn_likelihood)
+
+        params = initialize_batched_model(init, 3, init_key, (10, 1))
+
         batched_nn_init_fn, self.batched_nn_apply_fn, _ = get_pure_batched_nn_functions(output_dim,
                                                                                         hidden_layer_sizes,
                                                                                         activation)
@@ -121,9 +122,10 @@ class BayesianNeuralNetworkVI(RegressionModel):
         batched_likelihood_init_fn, self.batched_likelihood_apply_fns, self.batched_likelihood_apply_fns_batch_inputs = get_pure_batched_likelihood_functions(likelihood_prior_mean)
 
         """ B) Initialize the parameters of the nns and likelihoods """
-        nn_params, nn_param_template = initialize_batched_model(batched_nn_init_fn, nn_key, (self.batch_size, input_dim))
-        likelihood_params, likelihood_params_template = initialize_batched_model(batched_likelihood_init_fn, lh_key, (self.batch_size, output_dim))
-
+        nn_params, nn_param_template = initialize_batched_model(batched_nn_init_fn, batch_size_vi, init_key, (self.batch_size, input_dim))
+        print(nn_params)
+        likelihood_params, likelihood_params_template = initialize_batched_model(batched_likelihood_init_fn, batch_size_vi, init_key, (self.batch_size, output_dim))
+        print("likelihood_params", likelihood_params)
         """ C) Setup prior and posterior modules """
         nn_prior_state = GaussianBeliefState.initialize(0.0, prior_std, nn_param_template)
 
@@ -203,6 +205,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         pred_dists = self.batched_likelihood_apply_fns_batch_inputs.get_posterior_from_means(lh_params, None, ys_pred)
         pred_mixture = get_mixture(pred_dists, self.batch_size_vi)
+
+
         # # shape is (num_posterior_samples, batch_size, output_dim) -> transformed to (batch_size, output_dim, num_posterior_samples)
         # pred_dists = stack_distributions(pred_dists)
         # 
