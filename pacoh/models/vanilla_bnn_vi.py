@@ -120,7 +120,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
                                     log_prob_fn=self.apply_broadcast.log_prob, batch_pred_fn=self.apply.pred)
 
         self.elbo = elbo_fn
-        self.elbo_val_and_grad = jax.jit(jax.value_and_grad(elbo_fn))
+        self.elbo_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(elbo_fn)))
         self.pred_dist_apply = jax.jit(self.apply.pred_dist)
 
     def _recompute_posterior(self, num_iter_fit=500):
@@ -156,8 +156,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
     def _step(self, x_batch, y_batch):
         self._rng, step_key = jax.random.split(self._rng)
-        elbo = self.elbo(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
-        print(elbo)
+        #elbo = self.elbo(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
+        #print(elbo)
         nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch, num_train_points=self._num_train_points)
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
         self.optimizer_state = new_opt_state
