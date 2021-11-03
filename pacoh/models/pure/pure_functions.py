@@ -54,7 +54,7 @@ def construct_vanilla_gp_forward_fns(input_dim, kernel_outputscale, kernel_lengt
     return factory
 
 
-@functools.partial(multi_transform_and_batch_module, num_data_args={'log_likelihood': 2, 'pred_dist': 1})
+@functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'pred_dist': 1, 'pred': 1})
 def construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation,
                                  likelihood_initial_std, learn_likelihood=True):
     def factory():
@@ -69,13 +69,9 @@ def construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation,
         def log_prob(ys_true, ys_pred):
             return likelihood.log_prob(ys_true, ys_pred)
 
-        return pred_dist, VanillaBNNVIInterface(log_likelihood=log_prob, pred_dist=pred_dist)
+        def pred(xs):
+            return nn(xs)
+
+        return pred_dist, VanillaBNNVIInterface(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
 
     return factory
-
-
-
-
-
-
-

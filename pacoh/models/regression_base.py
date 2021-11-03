@@ -91,7 +91,7 @@ class RegressionModel(ABC):
         Returns: (avg_log_likelihood, rmse)
 
         """
-        test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
+        # This should not be necessary: test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
         pred_dist = self.predict(test_xs)
         avg_log_likelihood = jnp.sum(pred_dist.log_prob(test_ys)) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))

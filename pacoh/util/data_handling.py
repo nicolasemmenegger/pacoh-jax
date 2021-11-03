@@ -6,6 +6,7 @@ import jax
 from jax import numpy as jnp
 
 from pacoh.modules.distributions import AffineTransformedDistribution
+from pacoh.util.typing import RawPredFunc, NormalizedPredFunc
 
 
 class DataNormalizer:
@@ -72,11 +73,14 @@ class DataNormalizer:
             return self.normalize_data(xs)
 
 
-
-def normalize_predict(predictfn):
-    def normalized_predict(self, test_x, return_density=True):
+def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
+    """
+    Important note: when applying this decorator to a method, the resulting method acquires the argument
+        return_density, defaulting to the value True
+    """
+    def normalized_predict(self, test_x, return_density=True, *args):
         test_x_normalized = self._normalizer.handle_data(test_x)
-        pred_dist = predictfn(self, test_x_normalized)
+        pred_dist = predict_fn(self, test_x_normalized, *args)
 
         if not self._normalizer.turn_off_normalization:
             mean = self._normalizer.y_mean

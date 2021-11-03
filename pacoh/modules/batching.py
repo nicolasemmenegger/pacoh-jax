@@ -113,7 +113,9 @@ if __name__ == "__main__":
             return nn(xs)
         return forward
 
-    @functools.partial(multi_transform_and_batch_module_with_state, num_data_args={'base_learner_fit': 2, 'base_learner_mll_estimator': 2})
+
+    @functools.partial(multi_transform_and_batch_module_with_state,
+                       num_data_args={'base_learner_fit': 2, 'base_learner_mll_estimator': 2})
     def batched_pacoh_gp_map_forward(input_dim):
         def factory():
             covar_module = JAXRBFKernel(input_dim)
