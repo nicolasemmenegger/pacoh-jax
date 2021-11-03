@@ -1,4 +1,5 @@
 import functools
+import sys
 from typing import Callable, Dict
 
 import jax
@@ -9,10 +10,11 @@ from tqdm import trange
 
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
-from pacoh.modules.pure_functions import get_pure_batched_likelihood_functions, \
+from pacoh.models.pure.pure_functions import get_pure_batched_likelihood_functions, \
     get_pure_batched_nn_functions, construct_bnn_vi_forward_fns
-from pacoh.modules.pure_interfaces import LikelihoodInterface
-from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
+from pacoh.models.pure.pure_interfaces import LikelihoodInterface
+from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
+from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
 from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import pytree_unstack, Tree, broadcast_params
 from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
@@ -110,40 +112,21 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         """ A) Get batched forward functions for the nn and likelihood"""
         self._rng, init_key = jax.random.split(self._rng)
+        init, apply, _ = construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation,
+                                                      likelihood_prior_mean, learn_likelihood)
 
-        init, apply, _ = construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation, likelihood_prior_mean, learn_likelihood)
+        """ B) Initialize the prior """
+        params, template = initialize_batched_model(init, batch_size_vi, init_key, (batch_size, input_dim))
 
-        params = initialize_batched_model(init, 3, init_key, (10, 1))
+        def mean_std_map(mod_name: str, name: str, val: jnp.array):
+            if LIKELIHOOD_MODULE_NAME in mod_name:
+                return likelihood_prior_mean, likelihood_prior_std
+            elif MLP_MODULE_NAME in mod_name:
+                return 0.0, prior_std
+            else:
+                raise AssertionError("There is a hk.Module in here that I don't know of")
 
-        batched_nn_init_fn, self.batched_nn_apply_fn, _ = get_pure_batched_nn_functions(output_dim,
-                                                                                        hidden_layer_sizes,
-                                                                                        activation)
-
-        batched_likelihood_init_fn, self.batched_likelihood_apply_fns, self.batched_likelihood_apply_fns_batch_inputs = get_pure_batched_likelihood_functions(likelihood_prior_mean)
-
-        """ B) Initialize the parameters of the nns and likelihoods """
-        nn_params, nn_param_template = initialize_batched_model(batched_nn_init_fn, batch_size_vi, init_key, (self.batch_size, input_dim))
-        print(nn_params)
-        likelihood_params, likelihood_params_template = initialize_batched_model(batched_likelihood_init_fn, batch_size_vi, init_key, (self.batch_size, output_dim))
-        print("likelihood_params", likelihood_params)
-        """ C) Setup prior and posterior modules """
-        nn_prior_state = GaussianBeliefState.initialize(0.0, prior_std, nn_param_template)
-
-        self.prior = {
-            'nn': nn_prior_state,
-        }
-        self.posterior = {
-            'nn': nn_prior_state,
-        }
-
-        self.learn_likelihood = learn_likelihood
-        if learn_likelihood:
-            lh_prior_state = GaussianBeliefState.initialize(likelihood_prior_mean, likelihood_prior_std, likelihood_param_template)
-            self.prior['lh'] = lh_prior_state
-            self.posterior['lh'] = lh_prior_state
-            self.fixed_likelihood_params = None
-        else:
-            self.fixed_likelihood_params = likelihood_params
+        self.posterior = self.prior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
 
         """ D) Setup optimizer: posterior parameters """
         lr_scheduler = optax.constant_schedule(lr)
@@ -153,7 +136,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         """ E) Setup pure objective function """
         elbo_fn = functools.partial(neg_elbo,
                                     prior=self.prior,
-                                    prior_weight=self.prior_weight,
+                                    prior_weight=prior_weight,
                                     batch_size_vi=self.batch_size_vi,
                                     nn_apply=self.batched_nn_apply_fn,
                                     likelihood_applys=self.batched_likelihood_apply_fns_batch_inputs,

@@ -2,7 +2,7 @@ import tensorflow as tf
 
 from pacoh.models.regression_base import RegressionModel
 from pacoh_nn.modules.neural_network import BatchedFullyConnectedNN
-from pacoh.modules.priors_posteriors import GaussianPosterior, GaussianPrior
+from pacoh.modules.belief import GaussianPosterior, GaussianPrior
 from pacoh_nn.modules.likelihood import GaussianLikelihood
 
 

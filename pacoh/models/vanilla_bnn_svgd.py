@@ -11,8 +11,8 @@ from pacoh.models.vanilla_bnn_vi import get_pure_batched_nn_functions
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
 from pacoh.modules.kernels import pytree_rbf_set
-from pacoh.modules.priors_posteriors import GaussianBeliefState, GaussianBelief
-from pacoh.modules.pure_functions import get_pure_batched_likelihood_functions
+from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
+from pacoh.models.pure.pure_functions import get_pure_batched_likelihood_functions
 from pacoh.util.data_handling import handle_batch_input_dimensionality
 from pacoh.util.initialization import initialize_batched_model
 

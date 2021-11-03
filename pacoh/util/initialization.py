@@ -38,7 +38,7 @@ def _call_init_batched(init: Callable[..., hk.Params],
         dummy_data.append(jnp.ones(shape))
 
     prng_keys = jax.random.split(prng_key, n_models)
-    return init(prng_keys, dummy_data)
+    return init(prng_keys, *dummy_data)
 
 
 def initialize_batched_model(init: Callable[..., hk.Params],

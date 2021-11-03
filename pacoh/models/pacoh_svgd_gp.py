@@ -11,7 +11,7 @@ from jax import numpy as jnp
 
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
-from pacoh.modules.priors_posteriors import GaussianBelief, GaussianBeliefState
+from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
 from pacoh.util.data_handling import Statistics, handle_batch_input_dimensionality
 from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.modules.means import JAXMean

@@ -7,7 +7,8 @@ from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel
 from pacoh.modules.means import JAXConstantMean
-from pacoh.modules.pure_interfaces import LikelihoodInterface, VanillaGPInterface, VanillaBNNVIInterface
+from pacoh.models.pure.pure_interfaces import LikelihoodInterface, VanillaGPInterface, VanillaBNNVIInterface
+from pacoh.util.constants import MLP_MODULE_NAME
 
 
 @transform_and_batch_module
@@ -53,23 +54,22 @@ def construct_vanilla_gp_forward_fns(input_dim, kernel_outputscale, kernel_lengt
     return factory
 
 
-@functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'pred_dist': 1})
+@functools.partial(multi_transform_and_batch_module, num_data_args={'log_likelihood': 2, 'pred_dist': 1})
 def construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation,
                                  likelihood_initial_std, learn_likelihood=True):
     def factory():
         likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std * likelihood_initial_std,
                                            learn_likelihood=learn_likelihood)
 
-        nn = hk.nets.MLP(output_sizes=hidden_layer_sizes + (output_dim,), activation=activation)
+        nn = hk.nets.MLP(name=MLP_MODULE_NAME, output_sizes=hidden_layer_sizes + (output_dim,), activation=activation)
 
         def pred_dist(xs):
-            ys_pred = nn(xs)
-            return likelihood.get_posterior_from_means(ys_pred)
+            return likelihood.get_posterior_from_means(nn(xs))
 
         def log_prob(ys_true, ys_pred):
             return likelihood.log_prob(ys_true, ys_pred)
 
-        return pred_dist, VanillaBNNVIInterface(pred_dist, log_prob)
+        return pred_dist, VanillaBNNVIInterface(log_likelihood=log_prob, pred_dist=pred_dist)
 
     return factory
 

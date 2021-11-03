@@ -3,10 +3,9 @@ import jax.numpy as jnp
 import jax.random
 import haiku as hk
 
-from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.models.regression_base import RegressionModel
-from pacoh.modules.pure_functions import construct_vanilla_gp_forward_fns
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, normalize_predict
+from pacoh.models.pure.pure_functions import construct_vanilla_gp_forward_fns
+from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.util.initialization import initialize_model
 
 class GPRegressionVanilla(RegressionModel):

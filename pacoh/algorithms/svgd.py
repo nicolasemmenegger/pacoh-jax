@@ -7,7 +7,7 @@ import optax
 from jax import grad
 from jax import numpy as jnp
 
-from pacoh.modules.priors_posteriors import GaussianBeliefState
+from pacoh.modules.belief import GaussianBeliefState
 from pacoh.util.tree import Tree, pytree_sum
 
 

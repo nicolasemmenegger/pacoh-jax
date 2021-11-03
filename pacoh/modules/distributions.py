@@ -7,6 +7,7 @@ from jax import numpy as jnp
 import haiku as hk
 
 from pacoh.modules.common import PositiveParameter
+from pacoh.util.constants import LIKELIHOOD_MODULE_NAME
 from pacoh.util.tree import stack_distributions
 
 
@@ -53,7 +54,7 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 class JAXGaussianLikelihood(hk.Module):
     def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1, learn_likelihood=True):
-        super().__init__()
+        super().__init__(LIKELIHOOD_MODULE_NAME)
         variance = jnp.ones((output_dim,))*variance
         if learn_likelihood:
             self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
