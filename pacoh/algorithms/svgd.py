@@ -1,4 +1,5 @@
 import warnings
+from functools import partial
 from typing import Union
 
 import jax
@@ -8,7 +9,7 @@ from jax import grad
 from jax import numpy as jnp
 
 from pacoh.modules.belief import GaussianBeliefState
-from pacoh.util.tree import Tree, pytree_sum
+from pacoh.util.tree import Tree, pytree_sum, pytree_unstack, pytree_shape
 
 
 class SVGD:
@@ -29,18 +30,20 @@ class SVGD:
         def sum_cols_of_kernel(params):
             # note that both data and rng are not needed
             # if a leaf has shape (*p), then params has (n, params)
-            K = kernel_forward_pytree(params, params)
+            K = kernel_forward_pytree(params)
             return jnp.sum(K, axis=1)
 
-        self.kernel_grads = grad(sum_cols_of_kernel) # TODO check that you need neither jacfwd nor jacrev
+        self.sum_of_cols = sum_cols_of_kernel
+
+        self.kernel_grads = jax.jacrev(sum_cols_of_kernel)
         self.get_kernel_matrix = kernel_forward_pytree
 
         # c) setup optimizer
         self.optimizer = optimizer
         self.optimizer_state = optimizer_state
 
-
-    def phi(self, particles: Union[Tree, GaussianBeliefState], *data):
+    @partial(jax.jit, static_argnums=0)
+    def neg_phi_update(self, particles: Tree, *data):
         """
         :param particles: A pytree of particles, where there are num_particles in the first dimension of the leaves
         :param data: A batch of data to evaluate the likelihood on
@@ -48,23 +51,29 @@ class SVGD:
         as a function space gradient)
         """
         warnings.warn("some sort of rng will be needed in the meta-learning case")
-        # the shapes commented below apply to each leaf of the pytree, where p is the shape of this leaf in a single particle
-        # and n is a particle
-        score_val = self.score(particles, None, *data) # shape (n, *p)
+        score_val = self.score(particles, None, *data)  # shape (n, *p)
         # (j, *ids) corresponds to grad_{x_j} p(x_j)
-        kernel_mat_val = self.get_kernel_matrix(particles) # shape (n,n)
+
+        kernel_mat_val = self.get_kernel_matrix(particles)  # shape (n,n)
+        n_particles = kernel_mat_val.shape[0]
         # (i, j) corresponds to K(x_j, x_i)
-        kernel_grad_val = self.kernel_grads(particles) # shape (n, n, *p)
+
+        kernel_grads_val = self.kernel_grads(particles) # shape (n, n, *p)
         # (i, j, *ids) corresponds to (grad_{x_j} f(x_j, x_i))[ids]
 
-        def phi_leaf(leaf_score, leaf_kernel_grad):
-            return (kernel_mat_val @ leaf_score + jnp.sum(leaf_kernel_grad, axis=1)) / n
+        @jax.jit
+        def neg_phi_update_leaf(leaf_score, leaf_kernel_grads):
+            # kernel_mat_val has shape (n, n) and leaf_score has shape (n, *p)
+            # the resulting product has shape (n, *p) as well
+            res = (jnp.tensordot(kernel_mat_val, leaf_score, axes=1) + jnp.sum(leaf_kernel_grads, axis=1)) / n_particles
+            return -res
 
-        return jax.tree_multimap(phi_leaf, score_val, kernel_grad_val)  # kernel_mat_val is symmetric
-
+        result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val) # kernel_mat_val is symmetric
+        return result
 
     def step(self, particles, *data):
-        updates, self.optimizer_state = self.optimizer.update(-self.phi(particles, *data), self.optimizer_state, particles)
+        decrease = self.neg_phi_update(particles, *data)
+        updates, self.optimizer_state = self.optimizer.update(decrease, self.optimizer_state, particles)
         particles = optax.apply_updates(particles, updates)
         return particles
 

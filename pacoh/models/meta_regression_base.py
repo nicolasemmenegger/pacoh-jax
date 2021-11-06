@@ -4,7 +4,6 @@ import jax
 import numpy as np
 
 import pacoh.util.evaluation
-from config import device
 from pacoh.models.regression_base import RegressionModel
 from pacoh.util.evaluation import calib_error_chi2
 from pacoh.util.data_handling import handle_batch_input_dimensionality

@@ -104,7 +104,7 @@ class GaussianBelief:
         """
         flattened, treedef = jax.tree_util.tree_flatten(parameters, lambda p: isinstance(p, GaussianBeliefState))
         keys_tree = jax.tree_util.tree_unflatten(treedef,
-                                                 jax.random.split(key, len(flattened))) # keys tree corresponding to the structure of the top_level tree of BeliefStates, i.e. one per model
+                                                 jax.random.split(key, len(flattened)))
         return jax.tree_multimap(jax.tree_util.Partial(GaussianBelief.rsample, num_samples=num_samples), parameters, keys_tree,
                                  is_leaf=lambda p: isinstance(p, GaussianBeliefState))
 

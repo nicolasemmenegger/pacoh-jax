@@ -35,14 +35,19 @@ class JAXRBFKernel(JAXKernel):
     def __call__(self, x1, x2):
         return rbf_cov(x1, x2, self.length_scale, self.output_scale)
 
+
+def pytree_sq_l2_dist(tree, other):
+    func = lambda x1, x2: jnp.sum(jax.lax.square(x1-x2))
+    return pytree_sum(jax.tree_multimap(func, tree, other))
+
+
 # Squared exponential kernel without anything learnable
 def pytree_rbf(tree, other, lengthscale=1.0, outputscale=1.0):
-    exponent = lambda x1, x2: jax.lax.square(x1-x2) / (lengthscale**2)
-    # TODO ask Jonas how I should handle the logscale parameters
-    return outputscale * jnp.exp(pytree_sum(jax.tree_multimap(exponent, tree, other)))
+    return outputscale * jnp.exp(-1.0*pytree_sq_l2_dist(tree, other)/(lengthscale**2))
 
-_pytree_rbf_mat_vec = jax.vmap(pytree_rbf, in_axes=(0, None))
-pytree_rbf_set = jax.vmap(pytree_rbf, in_axes=(None, 0))
+
+_pytree_rbf_mat_vec = jax.vmap(pytree_rbf, in_axes=(0, None, None, None))
+pytree_rbf_set = jax.vmap(_pytree_rbf_mat_vec, in_axes=(None, 0, None, None))
 
 class JAXRBFKernelNN(JAXKernel):
     def __init__(self,
