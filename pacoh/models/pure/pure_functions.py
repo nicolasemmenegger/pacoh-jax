@@ -55,8 +55,8 @@ def construct_vanilla_gp_forward_fns(input_dim, kernel_outputscale, kernel_lengt
 
 
 @functools.partial(multi_transform_and_batch_module, num_data_args={'log_prob': 2, 'pred_dist': 1, 'pred': 1})
-def construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes, activation,
-                                 likelihood_initial_std, learn_likelihood=True):
+def construct_bnn_forward_fns(output_dim, hidden_layer_sizes, activation,
+                              likelihood_initial_std, learn_likelihood=True):
     def factory():
         likelihood = JAXGaussianLikelihood(variance=likelihood_initial_std * likelihood_initial_std,
                                            learn_likelihood=learn_likelihood)

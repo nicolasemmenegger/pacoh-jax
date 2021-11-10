@@ -1,5 +1,4 @@
 import functools
-import sys
 import warnings
 from typing import Callable
 
@@ -7,10 +6,9 @@ import jax
 import numpy as np
 import optax
 from jax import numpy as jnp
-from tqdm import trange
 
 from pacoh.models.regression_base import RegressionModel
-from pacoh.models.pure.pure_functions import construct_bnn_vi_forward_fns
+from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
 from pacoh.modules.distributions import get_mixture
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
@@ -37,7 +35,7 @@ def neg_elbo(posterior: GaussianBeliefState,
     :param prior: dict of GaussianBeliefState
     :param prior_weight: how heavy to weight the kl term between prior and posterior
     :param batch_size_vi: how many samples to use for approximating the elbo expectation
-    :param num_train_samples: the total number of train_samples (TODO this could be handled via the prior weight part)
+    :param num_train_samples: the total number of train_samples
     :param nn_apply: the pure nn forward function
     :param likelihood_applys: the pure likelihood functions
     :param learn_likelihood: whether to use
@@ -102,9 +100,9 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
         # a) Get batched forward functions for the nn and likelihood
         self._rng, init_key = jax.random.split(self._rng)
-        init, self.apply, self.apply_broadcast = construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes,
-                                                                              activation, likelihood_prior_mean,
-                                                                              learn_likelihood)
+        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(output_dim, hidden_layer_sizes,
+                                                                           activation, likelihood_prior_mean,
+                                                                           learn_likelihood)
 
         # b) Initialize the prior and posterior
         params, template = initialize_batched_model(init, batch_size_vi, init_key, (batch_size, input_dim))
@@ -140,23 +138,8 @@ class BayesianNeuralNetworkVI(RegressionModel):
         # self.posterior = self.prior
         # self.fit(num_iter_fit) maybe with a predefined number of iterations
 
-    def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
-        train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
-        loss_list = []
-        pbar = trange(num_iter_fit)
-        for i in pbar:
-            x_batch, y_batch = next(train_batch_sampler)
-            loss = self._step(x_batch, y_batch)
-            loss_list.append(loss)
-
-            if i % log_period == 0:
-                loss = jnp.mean(jnp.array(loss_list))
-                loss_list = []
-                message = dict(loss=loss)
-                if x_val is not None and y_val is not None:
-                     metric_dict = self.eval(x_val, y_val)
-                     message.update(metric_dict)
-                pbar.set_postfix(message)
+    def fit(self, xs_val=None, ys_val=None, log_period=500, num_iter_fit=None):
+        super().fit(xs_val, ys_val, log_period, num_iter_fit)
 
     @normalize_predict
     def predict(self, xs, num_posterior_samples=20):
@@ -195,7 +178,7 @@ if __name__ == '__main__':
 
     n_iter_fit = 200  # 2000
     for i in range(200):
-        nn.fit(log_period=100, num_iter_fit=n_iter_fit)
+        nn.fit(log_period=100, num_iter_fit=n_iter_fit, xs_val=x_plot, ys_val=y_val)
         from matplotlib import pyplot as plt
 
         pred = nn.predict(x_plot)

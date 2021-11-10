@@ -6,14 +6,13 @@ import jax
 import numpy as np
 import optax
 from jax import numpy as jnp
-from tqdm import trange
 
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import get_mixture
 from pacoh.modules.kernels import pytree_rbf_set
 from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
-from pacoh.models.pure.pure_functions import construct_bnn_vi_forward_fns
+from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
 from pacoh.util.data_handling import normalize_predict, DataNormalizer
 from pacoh.util.initialization import initialize_batched_model
@@ -46,9 +45,9 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         # a) Get batched forward functions for the nn and likelihood (note that learn_likelihood controls whether the
         #    likelihood module actually contributes parameters
         self._rng, init_key = jax.random.split(self._rng)
-        init, self.apply, self.apply_broadcast = construct_bnn_vi_forward_fns(output_dim, hidden_layer_sizes,
-                                                                              activation, likelihood_prior_mean,
-                                                                              learn_likelihood)
+        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(output_dim, hidden_layer_sizes,
+                                                                           activation, likelihood_prior_mean,
+                                                                           learn_likelihood)
 
         # b) Initialize the particles
         params, template = initialize_batched_model(init, n_particles, init_key, (batch_size, input_dim))
@@ -94,29 +93,14 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
     def _recompute_posterior(self):
         pass
 
-    def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
-        train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
-        loss_list = []
-        pbar = trange(num_iter_fit)
-        for i in pbar:
-            x_batch, y_batch = next(train_batch_sampler)
-            loss = self.step(x_batch, y_batch)
-            loss_list.append(loss)
-
-            # if i % log_period == 0:
-            #     #loss = jnp.mean(jnp.array(loss_list))
-            #     loss_list = []
-            #     message = dict(loss=loss)
-            #     if x_val is not None and y_val is not None:
-            #         metric_dict = self.eval(x_val, y_val)
-            #         message.update(metric_dict)
-            #     pbar.set_postfix(message)
+    def fit(self, xs_val=None, ys_val=None, log_period=500, num_iter_fit=None):
+        super().fit(xs_val, ys_val, log_period, num_iter_fit)
 
     @normalize_predict
     def predict(self, xs):
         return get_mixture(self.apply.pred_dist(self.particles, None, xs), self.n_particles)
 
-    def step(self, x_batch, y_batch):
+    def _step(self, x_batch, y_batch):
         self.particles = self.svgd.step(self.particles, x_batch, y_batch)
 
 

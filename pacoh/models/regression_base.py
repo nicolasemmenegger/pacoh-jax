@@ -1,8 +1,12 @@
+import sys
+from typing import Dict
+
 import numpy as np
 import jax
 from jax import numpy as jnp
 from abc import ABC, abstractmethod
 
+from tqdm import trange
 
 from pacoh.util.data_handling import handle_batch_input_dimensionality, Sampler, DataNormalizer
 from pacoh.util.evaluation import calib_error, calib_error_chi2
@@ -80,7 +84,7 @@ class RegressionModel(ABC):
         self.add_data_points(xs, ys, refit)
 
 
-    def eval(self, test_xs, test_ys):
+    def eval(self, test_xs: jnp.array, test_ys: jnp.array)  -> Dict[str, float]:
         """
         Computes the average test log likelihood and the rmse on test data
 
@@ -91,14 +95,18 @@ class RegressionModel(ABC):
         Returns: (avg_log_likelihood, rmse)
 
         """
-        # This should not be necessary: test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
+        test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
         pred_dist = self.predict(test_xs)
         avg_log_likelihood = jnp.sum(pred_dist.log_prob(test_ys)) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
         calibr_error = calib_error(pred_dist, test_ys)
         calibr_error_chi2 = calib_error_chi2(pred_dist, test_ys)
-
-        return avg_log_likelihood.item(), rmse.item(), calibr_error.item(), calibr_error_chi2
+        return {
+            'avg. ll': avg_log_likelihood.item(),
+            'rmse': rmse.item(),
+            'calib err.': calibr_error.item(),
+            'calib err. chi2': calibr_error_chi2
+        }
 
     def confidence_intervals(self, test_x, confidence=0.9):
         pred_dist = self.predict(test_x)
@@ -112,6 +120,25 @@ class RegressionModel(ABC):
         """Target predict. """
         pass
 
+    def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
+        """ Default train loop, to be overwritten if custom behaviour is needed (e.g. for exact gp inference). """
+        train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
+        loss_list = []
+        pbar = trange(num_iter_fit)
+        for i in pbar:
+            x_batch, y_batch = next(train_batch_sampler)
+            loss = self._step(x_batch, y_batch)
+            loss_list.append(loss)
+
+            if i % log_period == 0:
+                loss = jnp.mean(jnp.array(loss_list))
+                loss_list = []
+                message = dict(loss=loss)
+                if x_val is not None and y_val is not None:
+                    metric_dict = self.eval(x_val, y_val)
+                    message.update(metric_dict)
+                pbar.set_postfix(message)
+
     """ ----- Private methods ----- """
     @abstractmethod
     def _recompute_posterior(self):
@@ -121,6 +148,13 @@ class RegressionModel(ABC):
         x_data and y_data are populated
         """
         pass
+
+    def _step(self, xs_batch, ys_batch):
+        """ One step of the train loop
+            Note:
+                this is not an abstract method because some modules may choose to not implement it.
+        """
+        raise NotImplementedError("This module does not implement the ._step method")
 
     def _clear_data(self):
         """
@@ -155,5 +189,4 @@ class RegressionModel(ABC):
 
         self._rng, sampler_key = jax.random.split(self._rng)
         return Sampler(xs, ys, batch_size, sampler_key, shuffle)
-
 

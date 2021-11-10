@@ -24,6 +24,7 @@ class SVGD:
             * in the meta-learning case, target_log_probs will take prior parameters and return an expected MLL + prior ll estimate
         """
         # a) score function
+        self.target_log_prob_batched = target_log_prob_batched
         self.score = jax.grad(lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data)))
 
         # b) kernel grad and matrix function

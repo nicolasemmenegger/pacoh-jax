@@ -20,9 +20,8 @@ def calib_error(pred_dist_vectorized, test_ys):
     return calib_rmse
 
 
-def calib_error_chi2(pred_dist_vectorized, test_t_tensor):
-    return 0.0
-    z2 = (((pred_dist_vectorized.mean - test_t_tensor) / pred_dist_vectorized.stddev) ** 2).detach().numpy()
+def calib_error_chi2(pred_dist_vectorized, test_ys):
+    z2 = (((pred_dist_vectorized.mean - test_ys) / pred_dist_vectorized.scale) ** 2)
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
     conf_levels = np.linspace(0.05, 1, 20)
     accs = np.array([f(p) for p in conf_levels])

@@ -8,6 +8,7 @@ from pacoh.models.pure.pure_functions import construct_vanilla_gp_forward_fns
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.util.initialization import initialize_model
 
+
 class GPRegressionVanilla(RegressionModel):
     def __init__(self,
                  input_dim: int,
@@ -74,6 +75,9 @@ class GPRegressionVanilla(RegressionModel):
     def reset_to_prior(self):
         self._params, self._state = self._prior_params, self._prior_state
 
+    def fit(self):
+        self._recompute_posterior()
+
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
         self._rng, fit_key = jax.random.split(self._rng)
@@ -108,20 +112,20 @@ if __name__ == "__main__":
     x_data_train, x_data_test = x_data[:n_train_samples].numpy(), x_data[n_train_samples:].numpy()
     y_data_train, y_data_test = y_data[:n_train_samples].numpy(), y_data[n_train_samples:].numpy()
 
-    normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, normalize_data=False)
+    #normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, normalize_data=True)
 
 
-    gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=normalizer, normalize_data=False)
+    gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=None, normalize_data=True)
     gp.add_data_points(x_data_train, y_data_train)
+    print(gp.eval(x_data_test, y_data_test))
 
-
-    res = []
-    for i in range(200):
-        alternate_xs = x_data_test[i:i+1]
-        alternate_ys = y_data_test[i:i+1]
-        res.append(gp.eval(alternate_xs, alternate_ys)[0])
-
-    print(res)
+    # res = []
+    # for i in range(200):
+    #     alternate_xs = x_data_test[i:i+1]
+    #     alternate_ys = y_data_test[i:i+1]
+    # 
+    # 
+    # print(res)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 

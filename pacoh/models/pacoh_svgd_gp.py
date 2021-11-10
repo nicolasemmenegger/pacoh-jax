@@ -19,7 +19,7 @@ from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
 from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import pytrees_stack
 
-from pacoh_map_gp import construct_pacoh_map_forward_fns
+from pacoh_map_gp import construct_pacoh_map_forward_fns, PACOH_MAP_GP
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 
 # this is all there is to it

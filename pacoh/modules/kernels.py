@@ -49,6 +49,7 @@ def pytree_rbf(tree, other, lengthscale=1.0, outputscale=1.0):
 _pytree_rbf_mat_vec = jax.vmap(pytree_rbf, in_axes=(0, None, None, None))
 pytree_rbf_set = jax.vmap(_pytree_rbf_mat_vec, in_axes=(None, 0, None, None))
 
+
 class JAXRBFKernelNN(JAXKernel):
     def __init__(self,
                  input_dim,
@@ -77,8 +78,6 @@ class JAXRBFKernelNN(JAXKernel):
         x1 = self.nn_ftr_map(x1)
         x2 = self.nn_ftr_map(x2)
         return rbf_cov(x1, x2, self.length_scale, self.output_scale)
-
-
 
 
 if __name__ == "__main__":
