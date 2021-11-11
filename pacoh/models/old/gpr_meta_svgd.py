@@ -182,7 +182,6 @@ class GPRegressionMetaLearnedSVGD(RegressionModelMetaLearned):
             self.svgd.step(self.particles, train_data_tuples_tiled)
 
         """ define predictive dist """
-
         def get_pred_dist(x_context, y_context, x_valid):
             with torch.no_grad():
                 x_context = x_context.view(torch.Size((1,)) + x_context.shape).repeat(self.num_particles, 1, 1)

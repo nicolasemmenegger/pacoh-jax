@@ -40,6 +40,7 @@ class RegressionModel(ABC):
 
         self._num_train_points = 0
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
+        self._normalizer = None
         if normalizer is None:
             self._normalizer = DataNormalizer(input_dim, output_dim, normalize_data)
         else:
@@ -84,7 +85,7 @@ class RegressionModel(ABC):
         self.add_data_points(xs, ys, refit)
 
 
-    def eval(self, test_xs: jnp.array, test_ys: jnp.array)  -> Dict[str, float]:
+    def eval(self, test_xs: jnp.array, test_ys: jnp.array, pred_dist=None)  -> Dict[str, float]:
         """
         Computes the average test log likelihood and the rmse on test data
 
@@ -96,7 +97,8 @@ class RegressionModel(ABC):
 
         """
         test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
-        pred_dist = self.predict(test_xs)
+        if pred_dist is None:
+            pred_dist = self.predict(test_xs)
         avg_log_likelihood = jnp.sum(pred_dist.log_prob(test_ys)) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
         calibr_error = calib_error(pred_dist, test_ys)

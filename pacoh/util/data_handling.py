@@ -75,7 +75,7 @@ class DataNormalizer:
 
 def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
     """
-    Important note: when applying this decorator to a method, the resulting method acquires the argument
+    Important note: when applying this decorator to a method, the resulting method is extended with the argument
         return_density, defaulting to the value True
     """
     def normalized_predict(self, test_x, return_density=True, *args):
@@ -180,3 +180,4 @@ def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] =
             return xs, ys
     else:
         return xs
+

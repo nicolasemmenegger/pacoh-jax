@@ -1,13 +1,20 @@
+import warnings
 from abc import ABC, abstractmethod
+from typing import NamedTuple, Optional
 
 import jax
-import numpy as np
+import haiku as hk
+from jax import numpy as jnp
 
-import pacoh.util.evaluation
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.evaluation import calib_error_chi2
-from pacoh.util.data_handling import handle_batch_input_dimensionality
+from pacoh.util.evaluation import calib_error, calib_error_chi2
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
 
+
+class TaskDict(NamedTuple):
+    xs: jnp.array
+    ys: jnp.array
+    state: Optional[hk.State]
 
 class RegressionModelMetaLearned(RegressionModel, ABC):
     """
@@ -25,19 +32,26 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             _fit_posterior(): A method that is called after adding data points
             predict(xs): target prediction
     """
+
+    def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
+                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
+        if normalizer is None:
+            self._normalizer = None # make sure we only set the normalizer based on the meta-tuples
+        self.fitted = False
+
     @abstractmethod
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
         """Fits a hyper-posterior according to one of {F-,}PACOH-{MAP, SVGD}-{GP,NN}"""
         pass
 
-    def meta_predict(self, context_x, context_y, test_x, return_density=False):
+    def meta_predict(self, context_x, context_y, test_x, return_density=True):
         """Convenience method that does a target_fit followed by a target_predict"""
         self._clear_data()
-        self.add_data_points(context_x, context_y)
-        self.predict(test_x, return_density=False)
+        self.add_data_points(context_x, context_y, refit=True)
+        return self.predict(test_x, return_density=return_density)
 
     def eval_datasets(self, test_tuples, **kwargs):
-        raise NotImplementedError
         """
         Performs meta-testing on multiple tasks / datasets.
         Computes the average test log likelihood, the rmse and the calibration error over multiple test datasets
@@ -50,69 +64,47 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         """
         assert (all([len(valid_tuple) == 4 for valid_tuple in test_tuples]))
 
-        ll_list, rmse_list, calibr_err_list, calibr_err_chi2_list= list(zip(*[self.meta_eval(*test_data_tuple, **kwargs) for test_data_tuple in test_tuples]))
+        ll, rmse, calib, chi2 = list(zip(*[self.meta_eval(*test_data_tuple, **kwargs)
+                                           for test_data_tuple in test_tuples]))
 
-        return np.mean(ll_list), np.mean(rmse_list), np.mean(calibr_err_list), np.mean(calibr_err_chi2_list)
+        return {
+            'avg. ll': jnp.mean(ll),
+            'rmse': jnp.mean(rmse),
+            'calib err.': jnp.mean(calib),
+            'calib err. chi2': jnp.mean(chi2)
+        }
 
-    def meta_eval(self,  context_x, context_y, test_x, test_y):
-        raise NotImplementedError
-        test_x, test_y = handle_batch_input_dimensionality(test_x, test_y)
-        test_y_tensor = torch.from_numpy(test_y).contiguous().float().flatten().to(device)
+    def meta_eval(self,  context_xs, context_ys, test_xs, test_ys):
+        test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
+        context_xs, context_ys = handle_batch_input_dimensionality(context_xs, context_ys)
+        pred_dist = self.meta_predict(context_xs, context_ys, test_xs, return_density=True)
+        return self.eval(test_xs, test_ys, pred_dist)
 
-        with torch.no_grad():
-            pred_dist = self.meta_predict(context_x, context_y, test_x, return_density=True)
-            avg_log_likelihood = pred_dist.log_prob(test_y_tensor) / test_y_tensor.shape[0]
-            rmse = torch.mean(torch.pow(pred_dist.mean - test_y_tensor, 2)).sqrt()
-
-            pred_dist_vect = self._vectorize_pred_dist(pred_dist)
-            calibr_error = pacoh.util.evaluation.calib_error(pred_dist_vect, test_y_tensor)
-            calibr_error_chi2 = calib_error_chi2(pred_dist_vect, test_y_tensor)
-
-            return avg_log_likelihood.cpu().item(), rmse.cpu().item(), calibr_error.cpu().item(), calibr_error_chi2
-
-    def _compute_meta_normalization_stats(self, meta_train_tuples):
-        """
-        Expects y to be flattened
-        """
-        xs_stack, ys_stack = map(list, zip(*[handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
-                                             meta_train_tuples]))
-        all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
-
-        if self.normalize_data:
-            self.x_mean, self.y_mean = np.mean(all_xs, axis=0), np.mean(all_ys, axis=0)
-            self.x_std, self.y_std = np.std(all_xs, axis=0) + 1e-8, np.std(all_ys, axis=0) + 1e-8
-        else:
-            self.x_mean, self.y_mean = np.zeros(all_xs.shape[1]), np.zeros(1)
-            self.x_std, self.y_std = np.ones(all_xs.shape[1]), np.ones(1)
-
+    """ ----- Private methods ------ """
     def _check_meta_data_shapes(self, meta_train_data):
+        """
+        :param meta_train_data: List of tuples of meta training data
+        :raises: AssertionError in case some dataset has wrong dimensions
+        """
         for i in range(len(meta_train_data)):
             meta_train_data[i] = handle_batch_input_dimensionality(*meta_train_data[i])
         self.input_dim = meta_train_data[0][0].shape[-1]
         self.output_dim = meta_train_data[0][1].shape[-1]
 
-        assert all([self.input_dim == train_x.shape[-1] and self.output_dim == train_t.shape[-1] for train_x, train_t in meta_train_data])
+        assert all([self.input_dim == train_x.shape[-1] and self.output_dim == train_t.shape[-1]
+                    for train_x, train_t in meta_train_data])
 
-    def _prepare_data_per_task(self, x_data, y_data, flatten_y=True):
-        # a) make arrays 2-dimensional
-        x_data, y_data = handle_batch_input_dimensionality(x_data, y_data, flatten_y)
-
-        # b) normalize data
-        x_data, y_data = self._normalize_data(x_data, y_data)
-
-        if flatten_y and y_data.ndim == 2:
-            assert y_data.shape[1] == 1
-            y_data = y_data.flatten()
-
-        # c) convert to tensors
-        return x_data, y_data
-
-    def _prepare_meta_train_tasks(self, meta_train_tuples, flatten_y=True):
+    def _prepare_meta_train_tasks(self, meta_train_tuples):
+        raise NotImplementedError
+        """
+        Sets up the model for meta fitting with the meta train tuples given
+        If no normalisation stats are previously set, computes them from the meta data sets
+        """
         self._check_meta_data_shapes(meta_train_tuples)
-        if self._normalization_stats is None:
-            self._compute_meta_normalization_stats(meta_train_tuples)
+        if self._normalizer is None:
+            self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples)
         else:
-            self._set_normalization_stats(self._normalization_stats)
+            warnings.warn("I removed the else branch at some point, this should already have been set")
 
         if not self.fitted:
             self._rng, init_rng = jax.random.split(self._rng) # random numbers
@@ -136,10 +128,3 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             task_dicts.append(task_dict)
 
         return task_dicts
-
-    # def _vectorize_pred_dist(self, pred_dist: numpyro.distributions.Distribution):
-    #     """
-    #     Models the predictive distribution passed according to an independent, heteroscedastic Gaussian,
-    #     i.e. forgets about covariance in case the distribution was multivariate.
-    #     """
-    #     return numpyro.distributions.Normal(pred_dist.mean, pred_dist.scale)

@@ -102,6 +102,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
 
     def _step(self, x_batch, y_batch):
         self.particles = self.svgd.step(self.particles, x_batch, y_batch)
+        return 0.0 # here I could return the log likelihood somehow
 
 
 if __name__ == '__main__':

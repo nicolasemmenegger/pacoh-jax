@@ -64,10 +64,8 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
         else:
             raise ValueError('Invalid mean_module option')
 
-        if learn_likelihood:
-            likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance_constraint_gt=1e-3)
-        else:
-            likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance=initial_noise_std*initial_noise_std, learn_likelihood=False)
+
+        likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance=initial_noise_std*initial_noise_std, learn_likelihood=False)
 
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
@@ -75,9 +73,9 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
         base_learner_fit = base_learner.fit
         base_learner_predict = base_learner.pred_dist
 
-        def base_learner_fit_and_predict(xs, ys, xs_test):
-            base_learner.fit(xs, ys)
-            return base_learner.pred_dist(xs_test)
+        # def base_learner_fit_and_predict(xs, ys, xs_test):
+        #     base_learner.fit(xs, ys)
+        #     return base_learner.pred_dist(xs_test)
 
         def base_learner_mll_estimator(xs, ys):
             return base_learner.marginal_ll(xs, ys)
@@ -91,10 +89,10 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
 class PACOH_MAP_GP(RegressionModelMetaLearned):
     def __init__(self,
                  input_dim: int,
+                 output_dim: int,
                  learning_mode: str = 'both',
                  weight_decay: float = 0.0,
                  feature_dim: int = 2,
-                 num_iter_fit: int = 10000,
                  covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
                  mean_module: Union[str, Callable[[], JAXMean]] = 'NN',
                  mean_nn_layers: Collection[int] = (32, 32),
@@ -104,7 +102,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                  lr_decay: float = 1.0,
                  normalize_data: bool = True,
                  normalizer: DataNormalizer = None,
-                 random_seed: jax.random.PRNGKey = None):
+                 random_state: jax.random.PRNGKey = None):
         """
         :param input_dim:
         :param learning_mode:
@@ -122,7 +120,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         :param normalization_stats:
         :param random_seed:
         """
-        super().__init__(normalize_data, normalize_data, normalization_stats, random_seed)
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
 
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla_gp'], 'Invalid learning mode'
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
@@ -132,7 +130,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.lr = lr
         self.weight_decay = weight_decay
         self.feature_dim = feature_dim
-        self.num_iter_fit = num_iter_fit
         self.task_batch_size = task_batch_size
         self.mean_nn_layers = mean_nn_layers
         self.kernel_nn_layers = kernel_nn_layers
