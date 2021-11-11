@@ -10,15 +10,17 @@ from pacoh.models.vanilla_bnn_svgd import BayesianNeuralNetworkSVGD
 from pacoh.modules.kernels import pytree_rbf_set, rbf_cov, pytree_rbf
 from pacoh.tests.utils import get_simple_sinusoid_dataset
 from pacoh.util.tree import pytree_unstack, broadcast_params
+from pacoh.util.typing import Tree
 
 
 class TreeTestCase(unittest.TestCase):
-    def treeAssertEquals(self, first: Any, second: Any, msg: Any = ...) -> None:
-        jax.tree_multimap(lambda p, other: self.assertEqual(p, other), first, second)
+    @staticmethod
+    def tree_assert_equal(first: Tree, second: Tree) -> None:
+        jax.tree_multimap(lambda p, other: np.testing.assert_equal(p, other), first, second)
 
-    def treeAssertAlmostEquals(self, first: float, second: float,
-                           places: int = ..., msg: Any = ..., delta: float = ...) -> None:
-        jax.tree_multimap(lambda p, other: self.assertAlmostEquals(p, other, places=places, delta=delta), first, second)
+    @staticmethod
+    def tree_assert_all_close(first: Tree, second: Tree) -> None:
+        jax.tree_multimap(lambda p, other: np.testing.assert_allclose(p, other, rtol=1e-3), first, second)
 
 
 class SVGDTest(TreeTestCase):
@@ -78,7 +80,7 @@ class SVGDTest(TreeTestCase):
 
         unstacked_updates = pytree_unstack(test_update)
         for k in range(self.n):
-            self.treeAssertAlmostEquals(updates[k], unstacked_updates[k])
+            self.tree_assert_all_close(updates[k], unstacked_updates[k])
 
     def test_pytree_rbf(self):
         """ Tests whether the pytree and vmap based implementation of the kernel matrix for svgd is working. """
@@ -88,6 +90,7 @@ class SVGDTest(TreeTestCase):
             for j in range(n):
                 self.assertEqual(pytree_res[i, j],
                                  rbf_cov(self.stacked_params[i], self.stacked_params[j], lambda: 1., lambda: 1.))
+
 
 if __name__ == '__main__':
     unittest.main()
