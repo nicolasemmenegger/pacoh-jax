@@ -1,3 +1,4 @@
+import functools
 import time
 import warnings
 from typing import Callable, Collection, Union
@@ -12,7 +13,7 @@ from jax import numpy as jnp
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
-from pacoh.util.data_handling import Statistics, handle_batch_input_dimensionality
+from pacoh.util.data_handling import Statistics, handle_batch_input_dimensionality, DataNormalizer
 from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
@@ -23,7 +24,7 @@ from pacoh_map_gp import construct_pacoh_map_forward_fns, PACOH_MAP_GP
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 
 # this is all there is to it
-construct_pacoh_svgd_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns)
+construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns)
 
 
 class PACOH_SVGD_GP(RegressionModelMetaLearned):
@@ -40,7 +41,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                  prior_weight: float = 1e-3,
                  feature_dim: int = 2,
                  num_iter_fit: int = 10000,
-                 covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
+                 learn_likelihood: bool = True,
+                 covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',  # TODO fix type annotation
                  mean_module: Union[str, Callable[[], JAXMean]] = 'NN',
                  mean_nn_layers: Collection[int] = (32, 32),
                  kernel_nn_layers: Collection[int] = (32, 32),
@@ -49,26 +51,12 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
                  normalize_data: bool = True,
-                 normalization_stats: Statistics = None,
-                 random_seed: jax.random.PRNGKey = None):
+                 normalizer: DataNormalizer = None,
+                 random_state: jax.random.PRNGKey = None):
         """
-        :param input_dim:
-        :param learning_mode:
-        :param weight_decay:
-        :param feature_dim:
-        :param num_iter_fit:
-        :param covar_module:
-        :param mean_module:
-        :param mean_nn_layers:
-        :param kernel_nn_layers:
-        :param task_batch_size:
-        :param lr:
-        :param lr_decay:
-        :param normalize_data:
-        :param normalization_stats:
-        :param random_seed:
+        Notes: This is an implementation that does minibatching both at the task and at the dataset level
         """
-        super().__init__(input_dim, output_dim, normalize_data, normalization_stats, random_seed)
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
 
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
@@ -85,8 +73,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self.mean_nn_layers = mean_nn_layers
         self.kernel_nn_layers = kernel_nn_layers
 
-
-        """ Meta learning setup """
+        # a) meta learning setup
         self.num_iter_fit, self.prior_weight, self.feature_dim = num_iter_fit, prior_weight, feature_dim
         self.weight_prior_std, self.bias_prior_std = weight_prior_std, bias_prior_std
         self.num_particles = num_particles
@@ -95,16 +82,47 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         else:
             self.task_batch_size = min(task_batch_size, len(meta_train_data))
 
-        """ SVGD Kernel setup """
-        if svgd_kernel == 'RBF':
-            kernel_fwd = lambda particles: pytree_rbf_set(particles, particles, length_scale=svgd_kernel_bandwidth, output_scale=1.0)
-        else:
+        # b) get batched forward functions for nparticle models in parallel
+        init, self.apply, self.apply_broadcast, self.apply_manytomany = construct_meta_gp_forward_fns(
+            input_dim, output_dim, mean_module, covar_module, 'both', feature_dim,
+            mean_nn_layers, kernel_nn_layers, learn_likelihood)
+
+        # c) initialize the the state of the hyperprior and of the hyperposterior particles
+        self._rng, init_key = jax.random.split(self._rng)
+        params, template = initialize_batched_model(init, num_particles, init_key, (self.task_batch_size, input_dim))
+
+        def mean_std_map(mod_name: str, name: str, _: jnp.array):
+            # note: there could also be a distrinction between kernel module and mean module I think here
+            if LIKELIHOOD_MODULE_NAME in mod_name:
+                return likelihood_prior_mean, likelihood_prior_std
+            elif MLP_MODULE_NAME in mod_name:
+                if MLP_WEIGHT_NAME in name:
+                    return 0.0, weight_prior_std
+                elif MLP_BIAS_NAME in bias_name:
+                    return 0.0, bias_prior_std
+            else:
+                raise AssertionError("Unknown hk.Module: can only handle mlp and likelihood")
+
+        self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
+        self._rng, particle_sample_key = jax.random.split(self._rng)
+        self.particles = GaussianBelief.rsample(self.hyperprior, particle_sample_key, num_particles)
+
+        # d) setup kernel forward function and the base learner log likelihood function
+        if svgd_kernel != "RBF":  # elif kernel == 'IMQ':
             raise NotImplementedError("IMQ and other options not yet supported")
 
-        # elif kernel == 'IMQ':
-        #     self.kernel = IMQSteinKernel(bandwidth=bandwidth)
-        # else:
-        #     raise NotImplemented
+        def kernel_fwd(particles):
+            return pytree_rbf_set(particles, particles, length_scale=svgd_kernel_bandwidth,
+                                  output_scale=1.0)
+
+        # e) setup all the forward functions needed by the SVGD class.
+        def target_post_prob_batched(hyper_posterior_particles, rngs, *data, mll_many_many):
+            meta_xs, meta_ys = data # meta_xs/meta_ys should have size (task_batch_size, batch_size, input_dim/output_dim)
+            mll_matrix = mll_many_many(hyper_posterior_particles, None, meta_xs, meta_ys) # this will have size Kxtask_batch
+            batch_data_likelihood_per_particle = jnp.sum(mll_matrix, axis=0) * num_tasks/task_batch_size  # TODO check axis
+            hyperprior_log_prob = GaussianBelief.log_prob(self.hyperprior, hyper_posterior_particles)
+            return batch_data_likelihood_per_particle + prior_weight + hyperprior_log_prob
+
 
         """ Optimizer setup """
         if lr_decay < 1.0:
@@ -112,59 +130,21 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         else:
             self.lr_scheduler = optax.constant_schedule(lr)
 
-        """ ------- normalization stats & data setup  ------- """
-        self._normalization_stats = normalization_stats
-        self.fitted = False
-
-        """-------- Setup haiku differentiable functions and parameters -------"""
-        # note that this is just the same as in pacoh map gp, but a batched and transformed version of it ('both' refers to the learning mode being learning both mean and covar module)
-        self._init_fn, self._apply_fns_same_input, self._apply_fns_distinct_inputs = construct_pacoh_svgd_forward_fns(input_dim, mean_module, covar_module, 'both', feature_dim, mean_nn_layers, kernel_nn_layers)
-
-
-        # TODO implement particle initialisation (the particles here are the parameters of the kernel and the mean and the likelihood that we learn)
-        # hyperprior is a Gaussianbelief on some bootstrap parameters
-        self.hyperprior = None
-        # then draw n priors
-        self.particles = None
-
-        self._rng, *init_keys = jax.random.split(self._rng, self.num_particles + 1)
-
-        """ B) Get pytrees with parameters for stacked models """
-        _, base_model_params_template = initialize_batched_model(self._init_fn, (self.batch_size, input_dim), self.num_particles)  # batched_nn_init_fn(init_keys, nn_input)
-
-        """ C) setup prior module """
-        # TODO support different initialisation based on a lambda
-        warnings.warn("the hyperprior is not initialized correctly yet")
-        # in some cases this may be worth putting directly into the model initializers
-        self.hyperprior = GaussianBeliefState.initialize(0.0, bias_prior_std+weight_prior_std, base_model_params_template)
-
-        """ D) Sample initial particles of the hyperposterior mixture """
-        self._rng, sample_key = jax.random.split(self._rng)
-        self.particles = GaussianBelief.rsample_multiple(self.hyperprior, sample_key, num_particles)
-
-
-        """ ----------- Setup optimizer ------------ """
-        if lr_decay < 1.0:
-            # staircase = True means it's the same as StepLR from torch.optim
-            self.lr_scheduler = optax.exponential_decay(lr, 1000, decay_rate=lr_decay, staircase=True)
+        assert optimizer in ['Adam', 'SGD'], "Optimizer option not supported"
+        if optimizer == "SGD":
+            self.optimizer = optax.sgd(self.lr_scheduler)
         else:
-            self.lr_scheduler = optax.constant_schedule(lr)
+            self.optimizer = optax.adam(self.lr_scheduler)
 
-        self.optimizer = optax.adam(self.lr_scheduler)
         self.optimizer_state = self.optimizer.init(self.particles)
 
+        # self.apply.base_learner_mll is already batched along the parameter dimensions. Now we batch it along xs, ys
+        mll_many_many = jax.jit(jax.vmap(self.apply.base_learner_mll_estimator, (None, None, 0, 0), 1))
+        self.svgd = SVGD(functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
+                         jax.jit(kernel_fwd), self.optimizer, self.optimizer_state)
 
-        """ Setup SVGD Algorithms"""
-        def target_log_prob_batched(particles, rngs, *data):
-            log_prob = self._apply_fns_same_input.log(particles, rngs, *data)
-            prior_prob = GaussianBelief.log_prob(self.hyperprior, particles)
-            return len(meta_train_data) / task_batch_size * log_prob + prior_weight * prior_prob
-
-        self.svgd = SVGD(target_log_prob_batched, kernel_fwd, self.optimizer, self.optimizer_state)
-
-
-
-def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
+    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
+        super().meta_fit(meta_train_tuples, meta_valid_tuples, verbose=verbose, log_period=log_period, n_iter=n_iter)
         """ Runs the meta train loop for some number of iterations """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)

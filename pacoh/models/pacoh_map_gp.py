@@ -65,7 +65,9 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
             raise ValueError('Invalid mean_module option')
 
 
-        likelihood = JAXGaussianLikelihood(output_dim=output_dim, variance=initial_noise_std*initial_noise_std, learn_likelihood=False)
+        likelihood = JAXGaussianLikelihood(output_dim=output_dim,
+                                           variance=initial_noise_std*initial_noise_std,
+                                           learn_likelihood=learn_likelihood)
 
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
@@ -159,7 +161,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=self.weight_decay, mask=self.mask_fn)
         self.prior_params: hk.Params
         self.opt_state: optax.OptState
-
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
         """ Runs the meta train loop for some number of iterations """

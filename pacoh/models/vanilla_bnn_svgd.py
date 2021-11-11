@@ -49,7 +49,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
                                                                            activation, likelihood_prior_mean,
                                                                            learn_likelihood)
 
-        # b) Initialize the particles
+        # b) Initialize the prior and the particles of the posterior
         params, template = initialize_batched_model(init, n_particles, init_key, (batch_size, input_dim))
 
         def mean_std_map(mod_name: str, _: str, __: jnp.array):
