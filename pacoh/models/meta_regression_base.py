@@ -9,13 +9,8 @@ from jax import numpy as jnp
 from tqdm import trange
 
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, Sampler, MetaSampler
 
-
-class TaskDict(NamedTuple):
-    xs: jnp.array
-    ys: jnp.array
-    state: Optional[hk.State]
 
 class RegressionModelMetaLearned(RegressionModel, ABC):
     """
@@ -40,10 +35,11 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
                  normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
         if normalizer is None:
+            self._provided_normaliser = None
             self._normalizer = None # make sure we only set the normalizer based on the meta-tuples
         self.fitted = False
 
-    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None, vectorize_over_tasks=True):
+    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
         """
         :param meta_train_tuples:
         :param meta_valid_tuples:
@@ -56,8 +52,14 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             at the task level).
         """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
-        task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
-        meta_batch_sampler = self._get_meta_batch_sampler(task_dicts, self.task_batch_size, self.data_set_batch_size, vectorize=vectorize_over_tasks)
+
+        if self._provided_normaliser is None:
+            self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True)
+            warnings.warn("check if normalization is correct here")
+
+        self._check_meta_data_shapes(meta_train_tuples)
+        meta_train_tuples = self._normalizer.handle_meta_tuples(meta_train_tuples)
+        meta_batch_sampler = self._get_meta_batch_sampler(meta_train_tuples, self.task_batch_size, self.dataset_batch_size, vectorize=vectorize_over_tasks)
 
         t = time.time()
         loss_list = []
@@ -70,13 +72,13 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             # - 2 lists of size task_batch_size of xs and ys each of variable sizes
             # - an array of size (task_batch_size, data_set_batch_size, {input_dim or output_dim resp.})
             xs_task_list, ys_task_list = next(meta_batch_sampler)
-            loss = self._meta_step(xs_task_list, ys_task_list, vectorize_over_tasks)
+            loss = self._meta_step(xs_task_list, ys_task_list)
             loss_list.append(loss)
 
             if i % log_period == 0:
                 loss = jnp.mean(jnp.array(loss_list))
                 loss_list = []
-                message = dict(loss=loss)
+                message = dict(loss=loss, time=time.time() - t)
                 if meta_valid_tuples is not None:
                     agg_metric_dict = self.eval_datasets(meta_valid_tuples)
                     message.update(agg_metric_dict)
@@ -133,41 +135,39 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         assert all([self.input_dim == train_x.shape[-1] and self.output_dim == train_t.shape[-1]
                     for train_x, train_t in meta_train_data])
 
-    def _prepare_meta_train_tasks(self, meta_train_tuples):
-        raise NotImplementedError
+
+    def _get_meta_batch_sampler(self, meta_tuples, task_batch_size, shuffle=True, vectorize_over_dataset=False, batch_size=None):
         """
-        Sets up the model for meta fitting with the meta train tuples given
-        If no normalisation stats are previously set, computes them from the meta data sets
+        Returns an iterator to be used to sample minibatches from the dataset in the train loop
+        :param xs: The feature vectors
+        :param ys: The labels
+        :param batch_size: The size of the batches. If -1, will be the whole data set
+        :param shuffle: If this is true, we initially shuffle the data, and then iterate
+                        If it is false, we subsample each time the iterator gets queried
+        :return: a Sampler object (which is itself an iterator)
+        Notes:
+            expects the meta_tuples to be of the corect dimensionality
         """
-        self._check_meta_data_shapes(meta_train_tuples)
-        if self._normalizer is None:
-            self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples)
+        self._rng, sampler_key = jax.random.split(self._rng)
+
+
+        if batch_size == -1:
+            task_batch_size = len(meta_tuples)  # just use the whole dataset
+        elif batch_size > 0:
+            pass
         else:
-            warnings.warn("I removed the else branch at some point, this should already have been set")
+            raise AssertionError('task batch size must be either positive or -1')
 
-        if not self.fitted:
-            self._rng, init_rng = jax.random.split(self._rng) # random numbers
-            self.params, self.empty_state = self._init_fn(init_rng, meta_train_tuples[0][0]) # prior parameters, initial state
-            self.opt_state = self.optimizer.init(self.params)  # optimizer on the prior params
+        if vectorize_over_dataset:
+            if batch_size == -1:
+                batch_size = len(meta_tuples)  # just use the whole dataset
+            elif batch_size > 0:
+                pass
+            else:
+                raise AssertionError('batch size must be either positive or -1')
 
-        task_dicts = []
-
-        for xs,ys in meta_train_tuples:
-            # state of a gp can encapsulate caches of already fitted data and hopefully speed up inference
-            _, state = self._apply_fns.base_learner_fit(self.params, self.empty_state, self._rng, xs, ys)
-            task_dict = {
-                'xs_train': xs,
-                'ys_train': ys,
-                'hk_state': state
-            }
-
-            if flatten_y:
-                task_dict['ys_train'] = ys.flatten()
-
-            task_dicts.append(task_dict)
-
-        return task_dicts
+        return MetaSampler(meta_tuples, task_batch_size, sampler_key, shuffle, vectorize_over_dataset, batch_size)
 
     @abstractmethod
-    def _meta_step(self, xs_tasks, ys_tasks, vectorize_over_tasks):
+    def _meta_step(self, xs_tasks, ys_tasks):
         pass

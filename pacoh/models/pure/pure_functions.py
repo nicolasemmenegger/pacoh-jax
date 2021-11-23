@@ -109,7 +109,6 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
         else:
             raise ValueError('Invalid mean_module option')
 
-
         likelihood = JAXGaussianLikelihood(output_dim=output_dim,
                                            variance=initial_noise_std*initial_noise_std,
                                            learn_likelihood=learn_likelihood)
@@ -120,14 +119,9 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
         base_learner_fit = base_learner.fit
         base_learner_predict = base_learner.pred_dist
 
-        # def base_learner_fit_and_predict(xs, ys, xs_test):
-        #     base_learner.fit(xs, ys)
-        #     return base_learner.pred_dist(xs_test)
-
         def base_learner_mll_estimator(xs, ys):
             return base_learner.marginal_ll(xs, ys)
 
-        # this is the interface I want to vmap probably
         return init_fn, BaseLearnerInterface(base_learner_fit=base_learner_fit,
                                              base_learner_predict=base_learner_predict,
                                              base_learner_mll_estimator=base_learner_mll_estimator)

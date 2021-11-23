@@ -13,15 +13,14 @@ from jax import numpy as jnp
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
-from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, normalize_predict
-from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
+from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME, POSITIVE_PARAMETER_NAME, KERNEL_MODULE_NAME, \
+    MEAN_MODULE_NAME
+from pacoh.util.data_handling import DataNormalizer, normalize_predict
+from pacoh.modules.distributions import get_mixture
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
-from pacoh.util.initialization import initialize_batched_model
-from pacoh.util.tree import pytrees_stack
+from pacoh.util.initialization import initialize_batched_model, initialize_batched_model_with_state
 
-from pacoh_map_gp import PACOH_MAP_GP
 from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 
@@ -34,7 +33,13 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                  output_dim: int,
                  weight_prior_std=0.5,
                  bias_prior_std=3.0,
-                 svgd_kernel = 'SVGD',
+                 likelihood_prior_mean: float = 0.1,
+                 likelihood_prior_std: float = 1.0,
+                 kernel_prior_mean: float = 1.0,
+                 kernel_prior_std: float = 1.0,
+                 mean_module_prior_mean: float = 1.0,
+                 mean_module_prior_std: float = 1.0,
+                 svgd_kernel: str = 'RBF',
                  svgd_kernel_bandwidth=100.,
                  num_particles = 10,
                  optimizer='Adam',
@@ -45,10 +50,12 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                  learn_likelihood: bool = True,
                  covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',  # TODO fix type annotation
                  mean_module: Union[str, Callable[[], JAXMean]] = 'NN',
+                 learning_mode: str = 'both',
                  mean_nn_layers: Collection[int] = (32, 32),
                  kernel_nn_layers: Collection[int] = (32, 32),
                  task_batch_size: int = -1,
                  num_tasks: int = 1,
+                 vectorize_over_tasks=True,
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
                  normalize_data: bool = True,
@@ -56,6 +63,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                  random_state: jax.random.PRNGKey = None):
         """
         Notes: This is an implementation that does minibatching both at the task and at the dataset level
+
+
         """
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
 
@@ -85,22 +94,33 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
         # b) get batched forward functions for nparticle models in parallel
         init, self.apply, self.apply_broadcast = construct_meta_gp_forward_fns(
-            input_dim, output_dim, mean_module, covar_module, 'both', feature_dim,
+            input_dim, output_dim, mean_module, covar_module, learning_mode, feature_dim,
             mean_nn_layers, kernel_nn_layers, learn_likelihood)
 
         # c) initialize the the state of the hyperprior and of the hyperposterior particles
         self._rng, init_key = jax.random.split(self._rng)
-        params, template = initialize_batched_model(init, num_particles, init_key, (self.task_batch_size, input_dim))
+        params, template, states = initialize_batched_model_with_state(init, num_particles, init_key, (self.task_batch_size, input_dim))
 
         def mean_std_map(mod_name: str, name: str, _: jnp.array):
-            # note: there could also be a distrinction between kernel module and mean module I think here
+            """ This function specifies the hyperposterior for each of the components of the model.  """
+            # TODO maybe like a dictionary would be easier to pass things around
+            transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
+            # transform positive parameters to log_scale for storage
+
             if LIKELIHOOD_MODULE_NAME in mod_name:
                 return likelihood_prior_mean, likelihood_prior_std
             elif MLP_MODULE_NAME in mod_name:
-                if MLP_WEIGHT_NAME in name:
+                if name == "w":
                     return 0.0, weight_prior_std
-                elif MLP_BIAS_NAME in bias_name:
+                elif name == "b":
                     return 0.0, bias_prior_std
+                else:
+                    raise AssertionError("Unknown MLP parameter name")
+            elif KERNEL_MODULE_NAME in mod_name:
+                # lengthscale and ouputscale
+                return transform(kernel_prior_mean, name), kernel_prior_std
+            elif MEAN_MODULE_NAME in mod_name:
+                return mean_module_prior_mean, mean_module_prior_std
             else:
                 raise AssertionError("Unknown hk.Module: can only handle mlp and likelihood")
 
@@ -139,24 +159,27 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self.optimizer_state = self.optimizer.init(self.particles)
 
         # self.apply.base_learner_mll is already batched along the parameter dimensions. Now we batch it along xs, ys
+        if not vectorize_over_tasks:
+            raise NotImplementedError()
+
         mll_many_many = jax.jit(jax.vmap(self.apply.base_learner_mll_estimator, (None, None, 0, 0), 1))
         self.svgd = SVGD(functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
                          jax.jit(kernel_fwd), self.optimizer, self.optimizer_state)
 
+    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
+        super().meta_fit(meta_train_tuples, meta_valid_tuples, log_period=log_period, num_iter_fit=n_iter)
 
-
-    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
-        super().meta_fit(meta_train_tuples, meta_valid_tuples, verbose=verbose, log_period=log_period, n_iter=n_iter)
-
-    def _meta_step(self):
+    def _meta_step(self, xs_tasks, ys_tasks):
+        self.svgd.step(self.particles, xs_tasks, ys_tasks)
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
         self._rng, fitkey = self._rng.split()
         self.apply.base_learner_fit(self.particles,
-                                         self.state,
-                                         fitkey,
-                                         self.xs_data, self.ys_data)
+                                    self.state,
+                                    fitkey,
+                                    self.xs_data,
+                                    self.ys_data)
 
     @normalize_predict
     def predict(self, xs, return_density=False):
@@ -196,7 +219,6 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
     #     return task_dicts
 
 
-
 if __name__ == "__main__":
     from jax.config import config
     config.update("jax_debug_nans", False)
@@ -226,7 +248,7 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
 
     for weight_decay in [1.0]:
-        pacoh_svgd = PACOH_SVGD_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
+        pacoh_svgd = PACOH_SVGD_GP(1, 1, learning_mode='both', weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
@@ -235,7 +257,7 @@ if __name__ == "__main__":
 
         for i in range(10):
             n_iter = 2000
-            pacoh_svgd.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
+            pacoh_svgd.meta_fit(meta_train_data, log_period=1000, num_iter_fit=n_iter)
 
             itrs += n_iter
 

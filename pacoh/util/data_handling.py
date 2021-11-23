@@ -8,7 +8,6 @@ from jax import numpy as jnp
 from pacoh.modules.distributions import AffineTransformedDistribution
 from pacoh.util.typing import RawPredFunc, NormalizedPredFunc
 
-
 class DataNormalizer:
     def __init__(self, input_dim, output_dim, normalize_data=True):
         self.x_mean = jnp.zeros((input_dim,))
@@ -72,6 +71,9 @@ class DataNormalizer:
             xs = handle_batch_input_dimensionality(xs)
             return self.normalize_data(xs)
 
+    def handle_meta_tuples(self, meta_tuples):
+        return list(map(lambda tup: self.handle_data(tup[0], tup[1]), meta_tuples))
+
 
 def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
     """
@@ -130,6 +132,53 @@ class Sampler:
             self.i = (self.i + 1) % self.num_batches
             start = self.i * self.batch_size
             end = start + self.batch_size
+            return self.xs[start:end], self.ys[start:end]
+        else:
+            # just subsample at random using the _rds
+            raise NotImplementedError("only shuffle mode is supported for now")
+
+
+""" ----- Some simple data loaders ----- """
+class MetaSampler:
+    def __init__(self, meta_tuples, task_batch_size, rds, shuffle=True, vectorize_over_dataset=False, dataset_batch_size=None):
+        if vectorize_over_dataset and dataset_batch_size is None:
+            raise AssertionError("Please specify a dataset_batch_size")
+
+        num_tuples = len(meta_tuples)
+        self.num_task_batches = num_tuples // task_batch_size
+        self.shuffle = shuffle
+        self._rng = rds
+
+        if vectorize_over_dataset:
+            # initialize one sampler per dataset
+            self._rng, sampler_keys = jax.random.split(self._rng, num_tuples + 1)
+            self.samplers = [Sampler(data[0], data[1], dataset_batch_size, key)
+                             for data, key in zip(meta_tuples, sampler_keys)]
+            self.dataset_batch_size = dataset_batch_size
+
+        if shuffle:
+            self._rng, shuffle_key = jax.random.split(self._rng)
+            ids = jnp.arange(len(meta_tuples))
+            perm = jax.random.permutation(shuffle_key, ids)
+            self.i = -1
+            self.meta_tuples = meta_tuples[perm]
+            self.samplers = self.samplers[perm]
+        else:
+            self.meta_tuples = meta_tuples
+
+        self.batch_size = warnings.warn(
+            "this currently does not support a scenario in which the dataset size is not divisible by the batch size")
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.shuffle:
+            # just iterate
+            self.i = (self.i + 1) % self.num_task_batches
+            start = self.i * self.batch_size
+            end = start + self.batch_size
+
             return self.xs[start:end], self.ys[start:end]
         else:
             # just subsample at random using the _rds
