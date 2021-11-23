@@ -13,19 +13,20 @@ from jax import numpy as jnp
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
-from pacoh.util.data_handling import Statistics, handle_batch_input_dimensionality, DataNormalizer
-from pacoh.modules.distributions import AffineTransformedDistribution
+from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, normalize_predict
+from pacoh.modules.distributions import AffineTransformedDistribution, get_mixture
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
 from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import pytrees_stack
 
-from pacoh_map_gp import construct_pacoh_map_forward_fns, PACOH_MAP_GP
+from pacoh_map_gp import PACOH_MAP_GP
+from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 
 # this is all there is to it
 construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns)
-
 
 class PACOH_SVGD_GP(RegressionModelMetaLearned):
     def __init__(self,
@@ -83,7 +84,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             self.task_batch_size = min(task_batch_size, len(meta_train_data))
 
         # b) get batched forward functions for nparticle models in parallel
-        init, self.apply, self.apply_broadcast, self.apply_manytomany = construct_meta_gp_forward_fns(
+        init, self.apply, self.apply_broadcast = construct_meta_gp_forward_fns(
             input_dim, output_dim, mean_module, covar_module, 'both', feature_dim,
             mean_nn_layers, kernel_nn_layers, learn_likelihood)
 
@@ -123,7 +124,6 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             hyperprior_log_prob = GaussianBelief.log_prob(self.hyperprior, hyper_posterior_particles)
             return batch_data_likelihood_per_particle + prior_weight + hyperprior_log_prob
 
-
         """ Optimizer setup """
         if lr_decay < 1.0:
             self.lr_scheduler = optax.exponential_decay(lr, 1000, decay_rate=lr_decay, staircase=True)
@@ -143,148 +143,25 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self.svgd = SVGD(functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
                          jax.jit(kernel_fwd), self.optimizer, self.optimizer_state)
 
+
+
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
         super().meta_fit(meta_train_tuples, meta_valid_tuples, verbose=verbose, log_period=log_period, n_iter=n_iter)
-        """ Runs the meta train loop for some number of iterations """
-        assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
-        task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
 
-        t = time.time()
-        cum_loss = 0.0
-        n_iter = self.num_iter_fit if n_iter is None else n_iter
-
-        # construct the loss function
-        def regularized_loss(params, state, rng, xs, ys):
-            ll, state = self._apply_fns.base_learner_mll_estimator(params, state, rng, xs, ys)
-            prior = self.ll_under_hyperprior(params)
-            return -ll - prior, state
-
-        # batching
-        batched_losses_and_states = jax.vmap(regularized_loss, in_axes=(None, 0, 0, 0, 0), out_axes=(0,0))
-        def cumulative_loss(*args):
-            lls, states = batched_losses_and_states(*args)
-            return jnp.sum(lls), states
-
-
-
-        # auto differentiation and jit compilation
-        batched_mll_value_and_grad = jax.value_and_grad(cumulative_loss, has_aux=True)
-        batched_mll_value_and_grad = jax.jit(batched_mll_value_and_grad)
-
-        for itr in range(1, n_iter + 1):
-            print(itr)
-            # a) choose a minibatch. TODO: make this more elegant
-            self._rng, choice_key = jax.random.split(self._rng)
-            batch_indices = jax.random.choice(choice_key, len(task_dicts), shape=(self.task_batch_size,))
-            batch = [task_dicts[i] for i in batch_indices]
-            batched_xs = jnp.array([task['xs_train'] for task in batch])
-            batched_ys = jnp.array([task['ys_train'] for task in batch])
-            batched_states = pytrees_stack([task['hk_state'] for task in batch])
-            apply_rngs = jax.random.split(self._rng, 1+self.task_batch_size)
-            self._rng = apply_rngs[0]
-            apply_rngs = apply_rngs[1:]
-
-            # b) get value and gradient
-            output, gradients = batched_mll_value_and_grad(self.params, batched_states, apply_rngs, batched_xs, batched_ys)
-            loss, states = output  # we don't actually need the states
-
-
-            # c) compute and apply optimizer updates
-            updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)
-            self.params = optax.apply_updates(self.params, updates)
-
-            cum_loss += loss
-
-            # print training stats stats
-            if itr == 1 or itr % log_period == 0:
-                duration = time.time() - t
-                avg_loss = cum_loss / (log_period if itr > 1 else 1.0)
-                cum_loss = 0.0
-                t = time.time()
-
-                message = 'Iter %d/%d - Loss: %.6f - Time %.2f sec' % (itr, self.num_iter_fit, avg_loss, duration)
-
-                # if validation data is provided  -> compute the valid log-likelihood
-                if meta_valid_tuples is not None:
-                    warnings.warn("implement validation option")
-                    self.likelihood.eval()
-                    valid_ll, valid_rmse, calibr_err, calibr_err_chi2 = self.eval_datasets(meta_valid_tuples)
-                    self.likelihood.train()
-                    message += ' - Valid-LL: %.3f - Valid-RMSE: %.3f - Calib-Err %.3f' % (valid_ll, valid_rmse, calibr_err)
-
-                if verbose:
-                    logging.info(message)
-
-        self.fitted = True
-
-        warnings.warn("check what this assertion is used for")
-        # assert self.X_data.shape[0] == 0 and self.y_data.shape[0] == 0, "Data for posterior inference can be passed " \
-        #
-        #                                                               "only after the meta-training"
-
-        return cum_loss
-
-
-    def meta_predict(self, context_x, context_y, test_x, return_density=False):
-        """
-        Performs posterior inference (target training) with (context_x, context_y) as training data and then
-        computes the predictive distribution of the targets p(y|test_x, test_context_x, context_y) in the test points
-
-        Args:
-            context_x: (ndarray) context input data for which to compute the posterior
-            context_y: (ndarray) context targets for which to compute the posterior
-            test_x: (ndarray) query input data of shape (n_samples, ndim_x)
-            return_density: (bool) whether to return result as mean and std ndarray or as MultivariateNormal pytorch object
-
-        Returns:
-            (pred_mean, pred_std) predicted mean and standard deviation corresponding to p(t|test_x, test_context_x, context_y)
-        """
-        warnings.warn("I would suggest that meta_predict be deprecated in favor of separate fit and predict methods, no?", PendingDeprecationWarning)
-        context_x, context_y = handle_batch_input_dimensionality(context_x, context_y)
-        test_x = handle_batch_input_dimensionality(test_x)
-        assert test_x.shape[1] == context_x.shape[1]
-
-        # normalize data
-        context_x, context_y = self._prepare_data_per_task(context_x, context_y)
-        test_x = self._normalize_data(test_x, None)
-
-        # note that we use the empty_state because that corresponds to no data, by construction
-        self._rng, fit_key = jax.random.split(self._rng)
-        _, fitted_state = self._apply_fns.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
-        self._rng, pred_key =  jax.random.split(self._rng)
-        pred_dist, state = self._apply_fns.base_learner_predict(self.params, fitted_state, pred_key, test_x)
-        pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
-                                                             normalization_std=self.y_std)
-
-        if return_density:
-            return pred_dist_transformed
-        else:
-            pred_mean = pred_dist_transformed.mean
-            pred_std = pred_dist_transformed.stddev
-            return pred_mean, pred_std
+    def _meta_step(self):
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
         self._rng, fitkey = self._rng.split()
-        self._apply_fns.base_learner_fit(self.params,
+        self.apply.base_learner_fit(self.particles,
+                                         self.state,
                                          fitkey,
                                          self.xs_data, self.ys_data)
 
+    @normalize_predict
+    def predict(self, xs, return_density=False):
+        return get_mixture(self.apply.pred(self.particles, self.state, None, xs), self.num_particles)
 
-    # def predict(self, test_x, return_density=False):
-    #     test_x = _handle_batch_input_dimensionality(test_x)
-    #     test_x = self.normalize_data(test_x)
-    #     pred_dist = self._apply_fns.base_learner_predict(self._updater_state['params'], self._rng, test_x)
-    #
-    #     pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
-    #                                                           normalization_std=self.y_std)
-    #
-    #     if return_density:
-    #         return pred_dist_transformed
-    #     else:
-    #         pred_mean = pred_dist_transformed.mean
-    #         pred_std = pred_dist_transformed.stddev
-    #         return pred_mean, pred_std
     #
     # def _prepare_meta_train_tasks(self, meta_train_tuples, flatten_y=True):
     #     self._check_meta_data_shapes(meta_train_tuples)
@@ -349,7 +226,7 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
 
     for weight_decay in [1.0]:
-        pacoh_map = PACOH_MAP_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
+        pacoh_svgd = PACOH_SVGD_GP(1, learning_mode='both', num_iter_fit=20000, weight_decay=weight_decay, task_batch_size=2,
                                 covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
@@ -358,20 +235,20 @@ if __name__ == "__main__":
 
         for i in range(10):
             n_iter = 2000
-            pacoh_map.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
+            pacoh_svgd.meta_fit(meta_train_data, log_period=1000, n_iter=n_iter)
 
             itrs += n_iter
 
             x_plot = np.linspace(-5, 5, num=150)
             x_context, y_context, x_test, y_test = meta_test_data[0]
-            pred_mean, pred_std = pacoh_map.meta_predict(x_context, y_context, x_plot)
+            pred_mean, pred_std = pacoh_svgd.meta_predict(x_context, y_context, x_plot)
             # ucb, lcb = gp_model.confidence_intervals(x_context, x_plot)
 
             plt.scatter(x_test, y_test, color="green") # the unknown target test points
             plt.scatter(x_context, y_context, color="red") # the target train points
             plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
 
-            pred_prior, _ = pacoh_map.meta_predict(jnp.zeros((0,1)), jnp.zeros((0,)), x_plot)
+            pred_prior, _ = pacoh_svgd.meta_predict(jnp.zeros((0,1)), jnp.zeros((0,)), x_plot)
             plt.plot(x_plot, pred_prior.flatten(), color="red")
             lcb = pred_mean-pred_std
             ucb = pred_mean+pred_std

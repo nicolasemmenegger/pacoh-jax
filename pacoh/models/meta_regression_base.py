@@ -1,3 +1,4 @@
+import time
 import warnings
 from abc import ABC, abstractmethod
 from typing import NamedTuple, Optional
@@ -5,9 +6,9 @@ from typing import NamedTuple, Optional
 import jax
 import haiku as hk
 from jax import numpy as jnp
+from tqdm import trange
 
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.evaluation import calib_error, calib_error_chi2
 from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer
 
 
@@ -22,7 +23,9 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
     fitting and inference. It also includes meta-functionality, in particular meta_fitting to multiple tasks,
     and meta_prediction on a new task.
     Public Methods:
-        meta_fit: implementation of main algorithm, wi
+        predict: predicts with a fitted base learner
+        fit: fits the base learner
+        meta_fit: meta-learns the prior
         add_data_point(s): add data and refit the posterior
         predict: returns the predictive distribution for new points
     Notes:
@@ -40,10 +43,46 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             self._normalizer = None # make sure we only set the normalizer based on the meta-tuples
         self.fitted = False
 
-    @abstractmethod
-    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, verbose=True, log_period=500, n_iter=None):
-        """Fits a hyper-posterior according to one of {F-,}PACOH-{MAP, SVGD}-{GP,NN}"""
-        pass
+    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None, vectorize_over_tasks=True):
+        """
+        :param meta_train_tuples:
+        :param meta_valid_tuples:
+        :param verbose:
+        :param log_period:
+        :param n_iter:
+        :param vectorize_over_tasks: if this is true, we vectorize over the tasks as well.
+            In this case the task batches need to be all of the same size, which can either be achieved by making all the
+            meta-datasets the same size, or by minibatching both at the task AND dataset level (by default, we minibatch
+            at the task level).
+        """
+        assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
+        task_dicts = self._prepare_meta_train_tasks(meta_train_tuples)
+        meta_batch_sampler = self._get_meta_batch_sampler(task_dicts, self.task_batch_size, self.data_set_batch_size, vectorize=vectorize_over_tasks)
+
+        t = time.time()
+        loss_list = []
+        num_iter_fit = self.num_iter_fit if num_iter_fit is None else num_iter_fit # TODO do I really need this? seems wrong to specify loop size at initialisation
+        pbar = trange(num_iter_fit)
+
+        for i in pbar:
+            # a) choose a minibatch.
+            # train_batch_sampler returns one of the following:
+            # - 2 lists of size task_batch_size of xs and ys each of variable sizes
+            # - an array of size (task_batch_size, data_set_batch_size, {input_dim or output_dim resp.})
+            xs_task_list, ys_task_list = next(meta_batch_sampler)
+            loss = self._meta_step(xs_task_list, ys_task_list, vectorize_over_tasks)
+            loss_list.append(loss)
+
+            if i % log_period == 0:
+                loss = jnp.mean(jnp.array(loss_list))
+                loss_list = []
+                message = dict(loss=loss)
+                if meta_valid_tuples is not None:
+                    agg_metric_dict = self.eval_datasets(meta_valid_tuples)
+                    message.update(agg_metric_dict)
+                pbar.set_postfix(message)
+
+        self.fitted = True
 
     def meta_predict(self, context_x, context_y, test_x, return_density=True):
         """Convenience method that does a target_fit followed by a target_predict"""
@@ -128,3 +167,7 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             task_dicts.append(task_dict)
 
         return task_dicts
+
+    @abstractmethod
+    def _meta_step(self, xs_tasks, ys_tasks, vectorize_over_tasks):
+        pass

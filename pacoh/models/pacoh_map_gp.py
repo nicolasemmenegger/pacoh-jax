@@ -1,7 +1,7 @@
 import functools
 import time
 import warnings
-from typing import Callable, NamedTuple, Tuple, Collection, Union
+from typing import Callable, Collection, Union
 
 import haiku as hk
 import jax.random
@@ -13,80 +13,13 @@ from absl import logging
 from jax import numpy as jnp
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
+from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
 from pacoh.util.data_handling import DataNormalizer, handle_batch_input_dimensionality
-from pacoh.modules.distributions import JAXGaussianLikelihood, AffineTransformedDistribution
-from pacoh.modules.exact_gp import JAXExactGP
-from pacoh.modules.means import JAXMean, JAXConstantMean, JAXZeroMean
-from pacoh.modules.kernels import JAXRBFKernelNN, JAXRBFKernel, JAXKernel
+from pacoh.modules.distributions import AffineTransformedDistribution
+from pacoh.modules.means import JAXMean
+from pacoh.modules.kernels import JAXKernel
 from pacoh.util.tree import pytrees_stack
 
-class BaseLearnerInterface(NamedTuple):
-    """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky across calls
-    kernel, mean and likelihood, but needs to perform target inference in parallel. """
-    """This is the interface PACOH modules learners should provide.
-    hyper_prior_ll: A function that yields the log likelihood of the prior parameters under the hyperprior
-    base_learner_fit: Fits the modules learner to some data # maybe I need state here
-    base_learner_predict: Actual predict on a task
-    base_learner_mll_estimator: The mll of the modules estimator under the data one just passed it
-    """
-    base_learner_fit: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], None]
-    base_learner_predict: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.ndarray]
-    base_learner_mll_estimator: Callable[[Tuple[jnp.ndarray, jnp.ndarray]], jnp.float32]
-
-
-def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_option, learning_mode,
-                                    feature_dim, mean_nn_layers, kernel_nn_layers, learn_likelihood=True, initial_noise_std=1.0):
-    def factory():
-        """The arguments here are what _setup_gp_prior had. Maybe they need to be factories tho"""
-        # setup kernel module
-        if covar_option == 'NN':
-            assert learning_mode in ['learn_kernel', 'both'], 'neural network parameters must be learned'
-            covar_module = JAXRBFKernelNN(input_dim, feature_dim, layer_sizes=kernel_nn_layers)
-        elif covar_option == 'SE':
-            covar_module = JAXRBFKernel(input_dim)
-        elif callable(covar_option):
-            covar_module = covar_option()
-            assert isinstance(covar_module, JAXKernel), "Invalid covar_module option"
-        else:
-            raise ValueError('Invalid covar_module option')
-
-        # setup mean module
-        if mean_option == 'NN':
-            assert learning_mode in ['learn_mean', 'both'], 'neural network parameters must be learned'
-            mean_module = hk.nets.MLP(output_sizes=mean_nn_layers + (1,), activation=jax.nn.tanh)
-        elif mean_option == 'constant':
-            mean_module = JAXConstantMean()
-        elif mean_option == 'zero':
-            mean_module = JAXZeroMean()
-        elif callable(mean_option):
-            assert isinstance(mean_option, JAXMean), "Invalid mean_module option"
-            mean_module = mean_option
-        else:
-            raise ValueError('Invalid mean_module option')
-
-
-        likelihood = JAXGaussianLikelihood(output_dim=output_dim,
-                                           variance=initial_noise_std*initial_noise_std,
-                                           learn_likelihood=learn_likelihood)
-
-        base_learner = JAXExactGP(mean_module, covar_module, likelihood)
-
-        init_fn = base_learner.init_fn
-        base_learner_fit = base_learner.fit
-        base_learner_predict = base_learner.pred_dist
-
-        # def base_learner_fit_and_predict(xs, ys, xs_test):
-        #     base_learner.fit(xs, ys)
-        #     return base_learner.pred_dist(xs_test)
-
-        def base_learner_mll_estimator(xs, ys):
-            return base_learner.marginal_ll(xs, ys)
-
-        # this is the interface I want to vmap probably
-        return init_fn, BaseLearnerInterface(base_learner_fit=base_learner_fit,
-                                             base_learner_predict=base_learner_predict,
-                                             base_learner_mll_estimator=base_learner_mll_estimator)
-    return factory
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
     def __init__(self,
@@ -286,9 +219,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
 
         # note that we use the empty_state because that corresponds to no data, by construction
         self._rng, fit_key = jax.random.split(self._rng)
-        _, fitted_state = self._apply_fns.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
+        _, fitted_state = self.apply.base_learner_fit(self.params, self.empty_state, fit_key, context_x, context_y)
         self._rng, pred_key =  jax.random.split(self._rng)
-        pred_dist, state = self._apply_fns.base_learner_predict(self.params, fitted_state, pred_key, test_x)
+        pred_dist, state = self.apply.base_learner_predict(self.params, fitted_state, pred_key, test_x)
         pred_dist_transformed = AffineTransformedDistribution(pred_dist, normalization_mean=self.y_mean,
                                                              normalization_std=self.y_std)
 

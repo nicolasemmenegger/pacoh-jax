@@ -6,7 +6,7 @@ from haiku import Transformed, TransformedWithState, MultiTransformed, MultiTran
 from jax import vmap, numpy as jnp
 import haiku as hk
 
-from pacoh.models.pacoh_map_gp import BaseLearnerInterface
+from pacoh.models.pure.pure_interfaces import BaseLearnerInterface
 from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel
