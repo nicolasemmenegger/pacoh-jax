@@ -119,7 +119,7 @@ if __name__ == "__main__":
     def batched_pacoh_gp_map_forward(input_dim):
         def factory():
             covar_module = JAXRBFKernel(input_dim)
-            mean_module = hk.nets.MLP(output_sizes=(32,32) + (1,), activation=jax.nn.tanh)
+            mean_module = hk.nets.MLP(output_sizes=(32, 32) + (1,), activation=jax.nn.tanh)
             likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
             base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 

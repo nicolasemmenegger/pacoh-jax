@@ -237,7 +237,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         self._rng, fitkey = self._rng.split()
         self._apply_fns.base_learner_fit(self.params,
                                          fitkey,
-                                         self.xs_data, self.ys_data)
+                                         self._xs_data, self._ys_data)
 
 
     def predict(self, test_x, return_density=False, **kwargs):

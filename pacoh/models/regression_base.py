@@ -10,9 +10,10 @@ from tqdm import trange
 
 from pacoh.util.data_handling import handle_batch_input_dimensionality, Sampler, DataNormalizer
 from pacoh.util.evaluation import calib_error, calib_error_chi2
+from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
 
 
-class RegressionModel(ABC):
+class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
                  normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
         """
@@ -33,10 +34,10 @@ class RegressionModel(ABC):
                 _recompute_posterior(): A method that is called after adding data points
                 predict(xs): target prediction
         """
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.xs_data = jnp.zeros((0, input_dim))
-        self.ys_data = jnp.zeros((0, output_dim))
+        self._input_dim = input_dim
+        self._output_dim = output_dim
+        self._xs_data = jnp.zeros((0, input_dim))
+        self._ys_data = jnp.zeros((0, output_dim))
 
         self._num_train_points = 0
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
@@ -57,17 +58,17 @@ class RegressionModel(ABC):
             refit: whether to refit the posterior or not
         """
         xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
-        assert xs.ndim == 2 and xs.shape[1] == self.input_dim, "Something is wrong with your data"
-        assert ys.ndim == 2 and ys.shape[1] == self.output_dim, "Something is wrong with your data"
+        assert xs.ndim == 2 and xs.shape[1] == self._input_dim, "Something is wrong with your data"
+        assert ys.ndim == 2 and ys.shape[1] == self._output_dim, "Something is wrong with your data"
         # handle input dimensionality and normalize data
         xs, ys = self._normalizer.handle_data(xs, ys)
 
         # concatenate to new datapoints
-        self.xs_data = np.concatenate([self.xs_data, xs])
-        self.ys_data = np.concatenate([self.ys_data, ys])
+        self._xs_data = np.concatenate([self._xs_data, xs])
+        self._ys_data = np.concatenate([self._ys_data, ys])
         self._num_train_points += ys.shape[0]
 
-        assert self.xs_data.shape[0] == self.ys_data.shape[0] == self._num_train_points
+        assert self._xs_data.shape[0] == self._ys_data.shape[0] == self._num_train_points
 
         if refit:
             self._recompute_posterior()
@@ -85,7 +86,7 @@ class RegressionModel(ABC):
         self.add_data_points(xs, ys, refit)
 
 
-    def eval(self, test_xs: jnp.array, test_ys: jnp.array, pred_dist=None)  -> Dict[str, float]:
+    def eval(self, test_xs: jnp.array, test_ys: jnp.array, pred_dist=None) -> Dict[str, float]:
         """
         Computes the average test log likelihood and the rmse on test data
 
@@ -124,7 +125,7 @@ class RegressionModel(ABC):
 
     def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
         """ Default train loop, to be overwritten if custom behaviour is needed (e.g. for exact gp inference). """
-        train_batch_sampler = self._get_batch_sampler(self.xs_data, self.ys_data, self.batch_size)
+        train_batch_sampler = self._get_batch_sampler(self._xs_data, self._ys_data, self._batch_size)
         loss_list = []
         pbar = trange(num_iter_fit)
         for i in pbar:
@@ -140,6 +141,35 @@ class RegressionModel(ABC):
                     metric_dict = self.eval(x_val, y_val)
                     message.update(metric_dict)
                 pbar.set_postfix(message)
+
+    """ ----- Private attributes ----- """
+    @abstractattribute
+    def _input_dim(self) -> int:
+        ...
+
+    @abstractattribute
+    def _output_dim(self) -> int:
+        ...
+
+    @abstractattribute
+    def _xs_data(self) -> int:
+        ...
+
+    @abstractattribute
+    def _ys_data(self) -> int:
+        ...
+
+    @abstractattribute
+    def _normalizer(self) -> DataNormalizer:
+        ...
+
+    @abstractattribute
+    def _num_train_points(self) -> int:
+        ...
+
+    @abstractattribute
+    def _output_dim(self) -> int:
+        ...
 
     """ ----- Private methods ----- """
     @abstractmethod
@@ -164,8 +194,8 @@ class RegressionModel(ABC):
         Notes:
             called both at initialisation, and when clearing the stored observations
         """
-        self.xs_data = jnp.zeros((0, self.input_dim), dtype=np.double)
-        self.ys_data = jnp.zeros((0,), dtype=np.double)
+        self._xs_data = jnp.zeros((0, self._input_dim), dtype=np.double)
+        self._ys_data = jnp.zeros((0,), dtype=np.double)
         self._num_train_points = 0
 
     def _get_batch_sampler(self, xs, ys, batch_size, shuffle=True):

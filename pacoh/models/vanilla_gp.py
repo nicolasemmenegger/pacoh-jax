@@ -81,7 +81,7 @@ class GPRegressionVanilla(RegressionModel):
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints. """
         self._rng, fit_key = jax.random.split(self._rng)
-        _, self._state = self._apply_fns.fit_fn(self._params, self._state, fit_key, self.xs_data, self.ys_data)
+        _, self._state = self._apply_fns.fit_fn(self._params, self._state, fit_key, self._xs_data, self._ys_data)
 
     @normalize_predict
     def _prior(self, xs: jnp.ndarray):

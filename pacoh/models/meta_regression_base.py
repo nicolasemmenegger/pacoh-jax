@@ -1,18 +1,20 @@
+import abc
 import time
 import warnings
-from abc import ABC, abstractmethod
-from typing import NamedTuple, Optional
+from abc import ABC, abstractmethod, ABCMeta
+from typing import Optional
 
 import jax
-import haiku as hk
 from jax import numpy as jnp
 from tqdm import trange
+import numpy as np
+
 
 from pacoh.models.regression_base import RegressionModel
 from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, Sampler, MetaSampler
+from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
 
-
-class RegressionModelMetaLearned(RegressionModel, ABC):
+class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesABCMeta):
     """
     Abstracts the boilerplate functionality of a MetaLearnedRegression Model. This includes data normalization,
     fitting and inference. It also includes meta-functionality, in particular meta_fitting to multiple tasks,
@@ -30,14 +32,27 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
             _fit_posterior(): A method that is called after adding data points
             predict(xs): target prediction
     """
-
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
+                 normalizer: DataNormalizer = None, random_state: Optional[jax.random.PRNGKey] = None,
+                 task_batch_size: int = -1, num_tasks: int = None, num_iter_meta_fit: int = -1, minibatch_at_dataset_level: bool = False,
+                 dataset_batch_size: Optional[int] = None):
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
+        if num_tasks is None:
+            raise ValueError("Please specify the number of tasks you intend to train on at initialisation time")
+
+        if task_batch_size < 1:
+            self._task_batch_size = num_tasks
+        else:
+            self._task_batch_size = min(task_batch_size, num_tasks)
+
+        self._num_iter_meta_fit = num_iter_meta_fit
+        self._minibatch_at_dataset_level = minibatch_at_dataset_level
+        self._dataset_batch_size = dataset_batch_size
         if normalizer is None:
             self._provided_normaliser = None
-            self._normalizer = None # make sure we only set the normalizer based on the meta-tuples
+            self._normalizer = None  # make sure we only set the normalizer based on the meta-tuples
         self.fitted = False
+
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
         """
@@ -46,7 +61,7 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         :param verbose:
         :param log_period:
         :param n_iter:
-        :param vectorize_over_tasks: if this is true, we vectorize over the tasks as well.
+        :param minibatch_at_dataset_level: if this is true, we vectorize over the tasks as well.
             In this case the task batches need to be all of the same size, which can either be achieved by making all the
             meta-datasets the same size, or by minibatching both at the task AND dataset level (by default, we minibatch
             at the task level).
@@ -59,11 +74,15 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
 
         self._check_meta_data_shapes(meta_train_tuples)
         meta_train_tuples = self._normalizer.handle_meta_tuples(meta_train_tuples)
-        meta_batch_sampler = self._get_meta_batch_sampler(meta_train_tuples, self.task_batch_size, self.dataset_batch_size, vectorize=vectorize_over_tasks)
+        meta_batch_sampler = self._get_meta_batch_sampler(meta_train_tuples,
+                                                          self._task_batch_size,
+                                                          shuffle=True,
+                                                          minibatch_at_dataset_level=self._minibatch_at_dataset_level,
+                                                          dataset_batch_size=self._dataset_batch_size)
 
         t = time.time()
         loss_list = []
-        num_iter_fit = self.num_iter_fit if num_iter_fit is None else num_iter_fit # TODO do I really need this? seems wrong to specify loop size at initialisation
+        num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
         pbar = trange(num_iter_fit)
 
         for i in pbar:
@@ -121,6 +140,23 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         pred_dist = self.meta_predict(context_xs, context_ys, test_xs, return_density=True)
         return self.eval(test_xs, test_ys, pred_dist)
 
+    """ ----- Mandatory attributes ----- """
+    @abstractattribute
+    def _task_batch_size(self) -> int:
+        ...
+
+    @abstractattribute
+    def _dataset_batch_size(self) -> Optional[int]:
+        ...
+
+    @abstractattribute
+    def _minibatch_at_dataset_level(self) -> bool:
+        ...
+
+    @abstractattribute
+    def _num_iter_meta_fit(self) -> int:
+        ...
+
     """ ----- Private methods ------ """
     def _check_meta_data_shapes(self, meta_train_data):
         """
@@ -135,8 +171,8 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         assert all([self.input_dim == train_x.shape[-1] and self.output_dim == train_t.shape[-1]
                     for train_x, train_t in meta_train_data])
 
-
-    def _get_meta_batch_sampler(self, meta_tuples, task_batch_size, shuffle=True, vectorize_over_dataset=False, batch_size=None):
+    def _get_meta_batch_sampler(self, meta_tuples, task_batch_size, shuffle=True,
+                                minibatch_at_dataset_level=False, dataset_batch_size=None):
         """
         Returns an iterator to be used to sample minibatches from the dataset in the train loop
         :param xs: The feature vectors
@@ -151,22 +187,28 @@ class RegressionModelMetaLearned(RegressionModel, ABC):
         self._rng, sampler_key = jax.random.split(self._rng)
 
 
-        if batch_size == -1:
+        if  task_batch_size == -1:
             task_batch_size = len(meta_tuples)  # just use the whole dataset
-        elif batch_size > 0:
+        elif task_batch_size > 0:
             pass
         else:
             raise AssertionError('task batch size must be either positive or -1')
 
-        if vectorize_over_dataset:
-            if batch_size == -1:
-                batch_size = len(meta_tuples)  # just use the whole dataset
-            elif batch_size > 0:
+        if minibatch_at_dataset_level:
+            if dataset_batch_size == -1 or dataset_batch_size is None:
+                # check that they are all the same
+                lengths = [[xs.shape[0], ys.shape[0]] for xs, ys in meta_tuples]
+                lengths = np.array(lengths).flatten()
+                assert np.all(lengths == lengths[0]), "If minibatching at task level without specifying a batch_size," \
+                                                      "all datasets have to be of the same size"
+                dataset_batch_size = lengths[0]
+            elif dataset_batch_size > 0:
                 pass
             else:
                 raise AssertionError('batch size must be either positive or -1')
 
-        return MetaSampler(meta_tuples, task_batch_size, sampler_key, shuffle, vectorize_over_dataset, batch_size)
+        return MetaSampler(meta_tuples, task_batch_size, sampler_key, shuffle,
+                           minibatch_at_dataset_level, dataset_batch_size)
 
     @abstractmethod
     def _meta_step(self, xs_tasks, ys_tasks):
