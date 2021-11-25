@@ -1,15 +1,13 @@
 import warnings
 from functools import partial
-from typing import Union
 
 import jax
 import optax
 
-from jax import grad
 from jax import numpy as jnp
 
-from pacoh.modules.belief import GaussianBeliefState
-from pacoh.util.tree import Tree, pytree_sum, pytree_unstack, pytree_shape
+from pacoh.modules.kernels import pytree_sq_l2_dist, pytree_rbf, pytree_rbf_set, get_pytree_rbf_fn
+from pacoh.util.tree import Tree, pytree_sum, pytree_shape, pytree_unstack
 
 
 class SVGD:
@@ -57,7 +55,7 @@ class SVGD:
 
         kernel_mat_val = self.get_kernel_matrix(particles)  # shape (n,n)
         n_particles = kernel_mat_val.shape[0]
-        # (i, j) corresponds to K(x_j, x_i)
+        # (i, j) corresponds to K(x_j,x_i)
 
         kernel_grads_val = self.kernel_grads(particles) # shape (n, n, *p)
         # (i, j, *ids) corresponds to (grad_{x_j} f(x_j, x_i))[ids]
@@ -69,7 +67,7 @@ class SVGD:
             res = (jnp.tensordot(kernel_mat_val, leaf_score, axes=1) + jnp.sum(leaf_kernel_grads, axis=1)) / n_particles
             return -res
 
-        result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val) # kernel_mat_val is symmetric
+        result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val)  # kernel_mat_val is symmetric
         return result
 
     def step(self, particles, *data):
@@ -77,83 +75,6 @@ class SVGD:
         updates, self.optimizer_state = self.optimizer.update(decrease, self.optimizer_state, particles)
         particles = optax.apply_updates(particles, updates)
         return particles
-
-#
-# class RBF_Kernel(torch.nn.Module):
-#     r"""
-#       RBF kernel
-#
-#       :math:`K(x, y) = exp(||x-v||^2 / (2h))
-#       """
-#
-#     def __init__(self, bandwidth=None):
-#         super().__init__()
-#         self.bandwidth = bandwidth
-#
-#     def _bandwidth(self, norm_sq):
-#         # Apply the median heuristic (PyTorch does not give true median)
-#         if self.bandwidth is None:
-#             np_dnorm2 = norm_sq.detach().cpu().numpy()
-#             h = np.median(np_dnorm2) / (2 * np.log(np_dnorm2.shape[0] + 1))
-#             return np.sqrt(h).item()
-#         else:
-#             return self.bandwidth
-#
-#     def forward(self, X, Y):
-#         dnorm2 = norm_sq(X, Y)
-#         bandwidth = self._bandwidth(dnorm2)
-#         gamma = 1.0 / (1e-8 + 2 * bandwidth ** 2)
-#         K_XY = (-gamma * dnorm2).exp()
-#
-#         return K_XY
-#
-#
-#
-# class IMQSteinKernel(torch.nn.Module):
-#     r"""
-#     IMQ (inverse multi-quadratic) kernel
-#
-#     :math:`K(x, y) = (\alpha + ||x-y||^2/h)^{\beta}`
-#
-#     """
-#
-#     def __init__(self, alpha=0.5, beta=-0.5, bandwidth=None):
-#         super(IMQSteinKernel, self).__init__()
-#         assert alpha > 0.0, "alpha must be positive."
-#         assert beta < 0.0, "beta must be negative."
-#         self.alpha = alpha
-#         self.beta = beta
-#         self.bandwidth = bandwidth
-#
-#     def _bandwidth(self, norm_sq):
-#         """
-#         Compute the bandwidth along each dimension using the median pairwise squared distance between particles.
-#         """
-#         if self.bandwidth is None:
-#             num_particles = norm_sq.size(0)
-#             index = torch.arange(num_particles)
-#             norm_sq = norm_sq[index > index.unsqueeze(-1), ...]
-#             median = norm_sq.median(dim=0)[0]
-#             assert median.shape == norm_sq.shape[-1:]
-#             return median / math.log(num_particles + 1)
-#         else:
-#             return self.bandwidth
-#
-#     def forward(self, X, Y):
-#         norm_sq = (X.unsqueeze(0) - Y.unsqueeze(1))**2  # N N D
-#         assert norm_sq.dim() == 3
-#         bandwidth = self._bandwidth(norm_sq)  # D
-#         base_term = self.alpha + torch.sum(norm_sq / bandwidth, dim=-1)
-#         log_kernel = self.beta * torch.log(base_term)  # N N D
-#         return log_kernel.exp()
-#
-# """ Helpers """
-#
-# def norm_sq(X, Y):
-#     XX = X.matmul(X.t())
-#     XY = X.matmul(Y.t())
-#     YY = Y.matmul(Y.t())
-#     return -2 * XY + XX.diag().unsqueeze(1) + YY.diag().unsqueeze(0)
 
 
 if __name__ == "__main__":

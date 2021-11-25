@@ -36,10 +36,8 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         """
         self._input_dim = input_dim
         self._output_dim = output_dim
-        self._xs_data = jnp.zeros((0, input_dim))
-        self._ys_data = jnp.zeros((0, output_dim))
+        self._clear_data()
 
-        self._num_train_points = 0
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
         self._normalizer = None
         if normalizer is None:
@@ -152,11 +150,11 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         ...
 
     @abstractattribute
-    def _xs_data(self) -> int:
+    def _xs_data(self) -> jnp.array:
         ...
 
     @abstractattribute
-    def _ys_data(self) -> int:
+    def _ys_data(self) -> jnp.array:
         ...
 
     @abstractattribute
@@ -195,7 +193,7 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
             called both at initialisation, and when clearing the stored observations
         """
         self._xs_data = jnp.zeros((0, self._input_dim), dtype=np.double)
-        self._ys_data = jnp.zeros((0,), dtype=np.double)
+        self._ys_data = jnp.zeros((0, self._output_dim), dtype=np.double)
         self._num_train_points = 0
 
     def _get_batch_sampler(self, xs, ys, batch_size, shuffle=True):

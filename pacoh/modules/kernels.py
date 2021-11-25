@@ -1,3 +1,5 @@
+import functools
+
 import haiku as hk
 import jax
 
@@ -45,9 +47,13 @@ def pytree_sq_l2_dist(tree, other):
 def pytree_rbf(tree, other, lengthscale=1.0, outputscale=1.0):
     return outputscale * jnp.exp(-1.0*pytree_sq_l2_dist(tree, other)/(lengthscale**2))
 
-
 _pytree_rbf_mat_vec = jax.vmap(pytree_rbf, in_axes=(0, None, None, None))
-pytree_rbf_set = jax.vmap(_pytree_rbf_mat_vec, in_axes=(None, 0, None, None))
+_pytree_rbf_mat_mat = jax.vmap(_pytree_rbf_mat_vec, in_axes=(None, 0, None, None))
+
+def get_pytree_rbf_fn(lengthscale, outputscale):
+    return lambda p: _pytree_rbf_mat_mat(p, p, lengthscale, outputscale)
+
+pytree_rbf_set = None
 
 
 class JAXRBFKernelNN(JAXKernel):

@@ -3,7 +3,7 @@ from typing import Optional, Dict, Union
 
 import jax
 from haiku import Transformed, TransformedWithState, MultiTransformed, MultiTransformedWithState
-from jax import vmap, numpy as jnp
+from jax import vmap, numpy as jnp, jit
 import haiku as hk
 
 from pacoh.models.pure.pure_interfaces import BaseLearnerInterface
@@ -68,7 +68,7 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
                 data_in_axes[key] = (None,)*val
                 data_in_axes_batched[key] = (0,)*val
 
-    batched_init = vmap(init_fn, in_axes=(0, None))  # vmap along the rng dimension
+    batched_init = jit(vmap(init_fn, in_axes=(0, None)))  # vmap along the rng dimension
     base_in_axes = (0, 0, 0) if with_state else (0, 0)
 
     if not multi:
@@ -81,8 +81,8 @@ def get_batched_module(transformed: Union[Transformed, MultiTransformed, Transfo
         apply_dict = {}
         apply_dict_batched_inputs = {}
         for fname, func in apply_fns._asdict().items(): # TODO is there a public interface to this
-            apply_dict[fname] = vmap(func, in_axes=base_in_axes + data_in_axes[fname])
-            apply_dict_batched_inputs[fname] = vmap(func, in_axes=base_in_axes + data_in_axes_batched[fname])
+            apply_dict[fname] = jit(vmap(func, in_axes=base_in_axes + data_in_axes[fname]))
+            apply_dict_batched_inputs[fname] = jit(vmap(func, in_axes=base_in_axes + data_in_axes_batched[fname]))
 
         return batched_init, apply_fns.__class__(**apply_dict), apply_fns.__class__(**apply_dict_batched_inputs)
 
@@ -128,8 +128,6 @@ if __name__ == "__main__":
                                                               base_learner_mll_estimator=base_learner.marginal_ll)
         return factory
 
-
-    print("TESTING transform and batch")
 
     rds = jax.random.PRNGKey(42)
     batch_size_vi = 3

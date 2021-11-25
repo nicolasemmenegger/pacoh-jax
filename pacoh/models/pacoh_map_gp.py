@@ -13,6 +13,7 @@ from absl import logging
 from jax import numpy as jnp
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
+from pacoh.models.pacoh_svgd_gp import PACOH_SVGD_GP
 from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
 from pacoh.util.data_handling import DataNormalizer, handle_batch_input_dimensionality
 from pacoh.modules.distributions import AffineTransformedDistribution
@@ -20,6 +21,13 @@ from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel
 from pacoh.util.tree import pytrees_stack
 
+class PACOH_MAP_GP(PACOH_SVGD_GP):
+    def __init__(self, *args, **kwargs):
+        kwargs['num_particles'] = 1
+        super().__init__(*args, kwargs)
+        # think of how I could do this here
+
+        # super.= partial(super().__init__, num_particles=1)
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
     def __init__(self,

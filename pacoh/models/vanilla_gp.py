@@ -52,6 +52,7 @@ class GPRegressionVanilla(RegressionModel):
         self._rng, init_key = jax.random.split(self._rng)
         self._params, self._state = initialize_model(self._init_fn, init_key, (1, input_dim))
 
+        print(self._params)
         # keep these around to reset to prior and evaluate prior
         self._prior_params = self._params
         self._prior_state = self._state

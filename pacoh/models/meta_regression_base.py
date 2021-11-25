@@ -67,7 +67,7 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
             at the task level).
         """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
-
+        warnings.warn("there has to be a correcterr way to do norrmalisation")
         if self._provided_normaliser is None:
             self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True)
             warnings.warn("check if normalization is correct here")
@@ -109,7 +109,7 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         """Convenience method that does a target_fit followed by a target_predict"""
         self._clear_data()
         self.add_data_points(context_x, context_y, refit=True)
-        return self.predict(test_x, return_density=return_density)
+        return self.predict(test_x)
 
     def eval_datasets(self, test_tuples, **kwargs):
         """

@@ -7,23 +7,33 @@ import numpy as np
 import optax
 import torch
 from jax import numpy as jnp
+import haiku as hk
 
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
+from pacoh.models.pure.pure_interfaces import BaseLearnerInterface
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME, POSITIVE_PARAMETER_NAME, KERNEL_MODULE_NAME, \
     MEAN_MODULE_NAME
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.distributions import get_mixture
 from pacoh.modules.means import JAXMean
-from pacoh.modules.kernels import JAXKernel, pytree_rbf_set
+from pacoh.modules.kernels import JAXKernel, pytree_rbf_set, get_pytree_rbf_fn
 from pacoh.util.initialization import initialize_batched_model_with_state
 
 from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
 from pacoh.util.tree import pytree_unstack
+from pacoh.util.abstract_attributes import abstractattribute
+from pacoh.util.typing import Tree
 
-construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns)
+construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(construct_pacoh_map_forward_fns,
+                                                                            num_data_args={
+                                                                                'base_learner_fit': 2,
+                                                                                'base_learner_predict': 1,
+                                                                                'base_learner_mll_estimator': 2
+                                                                            })
+
 
 
 class PACOH_SVGD_GP(RegressionModelMetaLearned):
@@ -69,7 +79,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         # c) initialize the the state of the hyperprior and of the (hyper posterior) particles
         self._rng, init_key = jax.random.split(self._rng)
         params, template, self._empty_states = initialize_batched_model_with_state(init, num_particles, init_key,
-                                                                                 (self._task_batch_size, input_dim))
+                                                                                   (self._task_batch_size, input_dim))
         self._single_empty_state = pytree_unstack(self._empty_states)
 
         def mean_std_map(mod_name: str, name: str, _: jnp.array):
@@ -101,22 +111,18 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         if svgd_kernel != "RBF":  # elif kernel == 'IMQ':
             raise NotImplementedError("IMQ and other options not yet supported")
 
-        def kernel_fwd(particles):
-            return pytree_rbf_set(particles, particles, length_scale=svgd_kernel_bandwidth,
-                                  output_scale=1.0)
-
         if not minibatch_at_dataset_level:
             raise NotImplementedError()
 
-        # e) setup all the forward functions needed by the SVGD class.
+        # e) setup svgd target
         def target_post_prob_batched(hyper_posterior_particles, rngs, *data, mll_many_many):
             meta_xs, meta_ys = data # meta_xs/meta_ys should have size (task_batch_size, batch_size, input_dim/output_dim)
-            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, None, meta_xs, meta_ys) # this will have size Kxtask_batch
+            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, None, meta_xs, meta_ys)[0] # this will have size Kxtask_batch
             batch_data_likelihood_per_particle = jnp.sum(mll_matrix, axis=0) * num_tasks/task_batch_size  # TODO check axis
             hyperprior_log_prob = GaussianBelief.log_prob(self.hyperprior, hyper_posterior_particles)
-            return batch_data_likelihood_per_particle + prior_weight + hyperprior_log_prob
+            return batch_data_likelihood_per_particle + prior_weight * hyperprior_log_prob
 
-        """ Optimizer setup """
+        # f) setup the optimizer
         if lr_decay < 1.0:
             self.lr_scheduler = optax.exponential_decay(lr, 1000, decay_rate=lr_decay, staircase=True)
         else:
@@ -129,50 +135,74 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         warnings.warn("implement adamw, with weight decay?")
         self.optimizer_state = self.optimizer.init(self.particles)
 
-
-
+        # g) thread together svgd
         mll_many_many = jax.jit(jax.vmap(self._apply.base_learner_mll_estimator, (None, None, None, 0, 0), 1))
         self.svgd = SVGD(functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
-                         jax.jit(kernel_fwd), self.optimizer, self.optimizer_state)
+                         jax.jit(get_pytree_rbf_fn(svgd_kernel_bandwidth, 1.0)), self.optimizer, self.optimizer_state)
+
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
-        sampler = self._get_meta_batch_sampler(meta_train_tuples, 2, True, True, 10)
-        xs, ys = next(sampler)
-        self._apply.base_learner_mll_estimator
-
-        res = self._apply.base_learner_mll_estimator(self.particles, self._empty_states, None, xs[0], ys[0])
-        print("great success")
         super().meta_fit(meta_train_tuples, meta_valid_tuples, log_period=log_period, num_iter_fit=n_iter)
 
     def _meta_step(self, xs_tasks, ys_tasks):
-        self.svgd.step(self.particles, xs_tasks, ys_tasks)
+        self.particles = self.svgd.step(self.particles, xs_tasks, ys_tasks)
+        return 0.0
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
         warnings.warn("does this really do what I intended it to")
-        self._rng, fitkey = self._rng.split()
-        self._apply.base_learner_fit(self.particles,
-                                     self._empty_states,
-                                     fitkey,
-                                     self._xs_data,
-                                     self._ys_data)
+
+        # override some things for testing purposes
+        def foo(mod_name: str, name: str, value):
+            if mod_name == "jax_gaussian_likelihood/~/PositiveParameter":
+                return value * 0.0 + -2.99573
+            elif mod_name == "jaxrbf_kernel/~/LengthScale":
+                return value * 0.0
+            elif mod_name == "jaxrbf_kernel/~/OutputScale":
+                return value * 0.0 + 0.693147
+            else:
+                assert False, "boum"
+
+        fake_particles = hk.data_structures.map(foo, self.particles)
+        _, self._states = self._apply.base_learner_fit(fake_particles,
+                                                       self._empty_states,
+                                                       None,
+                                                       self._xs_data,
+                                                       self._ys_data)
+
+        print("hello")
 
     @normalize_predict
-    def predict(self, xs, return_density=False):
-        return get_mixture(self._apply.pred(self.particles, self._state, None, xs), self._num_particles)
+    def predict(self, xs):
+        # override some things for testing purposes
+        def foo(mod_name: str, name: str, value):
+            if mod_name == "jax_gaussian_likelihood/~/PositiveParameter":
+                return value*0.0 + -2.99573
+            elif mod_name == "jaxrbf_kernel/~/LengthScale":
+                return value*0.0
+            elif mod_name == "jaxrbf_kernel/~/OutputScale":
+                return value*0.0 + 0.693147
+            else:
+                assert False, "boum"
+
+        fake_particles = hk.data_structures.map(foo, self.particles)
+
+        pred_dist, _ = self._apply.base_learner_predict(fake_particles, self._states, None, xs)
+        return get_mixture(pred_dist, self._num_particles)
+
 
 
 if __name__ == "__main__":
     from jax.config import config
-    config.update("jax_debug_nans", False)
-    config.update('jax_disable_jit', False)
+    #config.update("jax_debug_nans", True)
+    #config.update('jax_disable_jit', True)
 
     from experiments.data_sim import SinusoidDataset
 
     data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
     n_tasks = 20
     meta_train_data = data_sim.generate_meta_train_data(n_tasks=n_tasks, n_samples=10)
-    meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=160)
+    meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=50)
 
     NN_LAYERS = (32, 32, 32, 32)
 
@@ -191,33 +221,36 @@ if __name__ == "__main__":
 
     torch.set_num_threads(2)
 
-    for weight_decay in [1.0]:
+    for weight_decay in [0.0]:
         pacoh_svgd = PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay, task_batch_size=2,
-                                covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
-                                kernel_nn_layers=NN_LAYERS)
+                                covar_module='SE', mean_module='zero', num_particles=1)
+
+        # PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay, task_batch_size=2,
+        #               covar_module='SE', mean_module='zero', mean_nn_layers=NN_LAYERS, feature_dim=2,
+        #               kernel_nn_layers=NN_LAYERS)
+
 
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(10):
-            n_iter = 2000
+            n_iter = 10
             pacoh_svgd.meta_fit(meta_train_data, log_period=1000, num_iter_fit=n_iter)
 
             itrs += n_iter
 
             x_plot = np.linspace(-5, 5, num=150)
             x_context, y_context, x_test, y_test = meta_test_data[0]
-            pred_mean, pred_std = pacoh_svgd.meta_predict(x_context, y_context, x_plot)
-            # ucb, lcb = gp_model.confidence_intervals(x_context, x_plot)
-
-            plt.scatter(x_test, y_test, color="green") # the unknown target test points
-            plt.scatter(x_context, y_context, color="red") # the target train points
+            # do a target fit
+            pacoh_svgd._clear_data()
+            pacoh_svgd.add_data_points(x_context, y_context, refit=True)
+            # do a target predict
+            pred_dist = pacoh_svgd.predict(x_plot)
+            pred_mean, pred_std = pred_dist.mean, pred_dist.loc
+            plt.scatter(x_test, y_test, color="green")  # the unknown target test points
+            plt.scatter(x_context, y_context, color="red")  # the target train points
             plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
-
-            pred_prior, _ = pacoh_svgd.meta_predict(jnp.zeros((0,1)), jnp.zeros((0,)), x_plot)
-            plt.plot(x_plot, pred_prior.flatten(), color="red")
-            lcb = pred_mean-pred_std
-            ucb = pred_mean+pred_std
+            lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
             plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()

@@ -49,6 +49,12 @@ class DataNormalizer:
         Normalizes the data according to the stored statistics and returns the normalized data
         Assumes the data already has the correct dimensionality.
         """
+        # TODO rermove
+        if ys is None:
+            return xs
+        else:
+            return xs, ys
+
         if self.turn_off_normalization:
             if ys is None:
                 return xs
@@ -113,8 +119,9 @@ class Sampler:
             ids = jnp.arange(xs.shape[0])
             perm = jax.random.permutation(shuffle_key, ids)
             self.i = -1
-            self.xs = xs[perm]
-            self.ys = ys[perm]
+            self.xs = xs #xs[tuple(perm)]
+            self.ys = ys #[tuple(perm)]
+            warnings.warn("This is definitely wrong")
         else:
             self.xs = xs
             self.ys = ys
@@ -187,7 +194,7 @@ class MetaSampler:
                 array_xs = jnp.stack([tup[0] for tup in subsampled_tuples], axis=0)
                 array_ys = jnp.stack([tup[1] for tup in subsampled_tuples], axis=0)
 
-                return array_xs, array_xs
+                return array_xs, array_ys
             else:
                 # just return a list of tasks
                 return self.xs_list[start:end], self.ys_list[start:end]
