@@ -16,8 +16,9 @@ class JAXExactGP:
             cov_module: hk.Module
             likelihood: hk.Module
 
-        :param mean_module:
-        :param cov_module:
+        :param mean_module: Should have a call function with signature (*, input_dim) -> (*, output_dim) where *
+            may be empty
+        :param cov_module: Should implement a function (input_dim,) x (input_dim,) -> float
         :param likelihood:
         """
         self.mean_module = mean_module
@@ -26,7 +27,6 @@ class JAXExactGP:
         self.cov_vec_vec = cov_module
         self.cov_vec_set = hk.vmap(cov_module.__call__, (None, 0))
         self.cov_set_set = hk.vmap(self.cov_vec_set.__call__, (0, None))
-        self.mean_set = hk.vmap(self.mean_module.__call__)
 
     def init_fn(self, dummy_xs):
         """Haiku initialiser"""
@@ -36,7 +36,7 @@ class JAXExactGP:
         return self.likelihood(self._prior(dummy_xs))
 
     def _ys_centered(self, xs, ys):
-        return ys - self.mean_set(xs).flatten()
+        return ys - self.mean_module(xs)
 
     def _data_cov_with_noise(self, xs):
         data_cov = self.cov_set_set(xs, xs)
@@ -52,17 +52,19 @@ class JAXExactGP:
     @functools.partial(hk.vmap, in_axes=(None, 0))
     def posterior(self, x: jnp.ndarray):
         xs = hk.get_state("xs", dtype=jnp.float32)
-        ys = hk.get_state("ys", dtype=jnp.float32).flatten()
+        ys = hk.get_state("ys", dtype=jnp.float32)
         chol = hk.get_state("cholesky", dtype=jnp.float32)
 
         def has_data(operand):
             # we have data
             x, xs, chol = operand
             new_cov_row = self.cov_vec_set(x, xs)
-            mean = self.mean_module(x) + jnp.dot(new_cov_row, cho_solve((chol, True), self._ys_centered(xs, ys)))
+            ys_cent = self._ys_centered(xs, ys).flatten()
+            cho_sol = cho_solve((chol, True), ys_cent)
+            mean = self.mean_module(x) + jnp.dot(new_cov_row.flatten(), cho_sol)
             var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
             std = jnp.sqrt(var)
-            return numpyro.distributions.Normal(loc=mean, scale=std)
+            return numpyro.distributions.Normal(loc=mean, scale=jnp.ones((1,))*std)
 
         def no_data(operand):
             x, _, __ = operand
@@ -102,10 +104,14 @@ class JAXExactGP:
         # computes the marginal log-likelihood of ys given xs and a posterior
         # computed on (xs,ys). This is differentiable and uses no stats
         ys_centered = self._ys_centered(xs, ys)
+        # testing purposes TODO remove
+
         data_cov_w_noise = self._data_cov_with_noise(xs)  # more noise
         cholesky = cho_factor(data_cov_w_noise)
         alpha = cho_solve(cholesky, ys_centered)
-        ll = -0.5 * jnp.dot(ys_centered, alpha)
+        f1 = ys_centered.flatten()
+        f2 = alpha.flatten()
+        ll = -0.5 * jnp.dot(ys_centered.flatten(), alpha.flatten())
         ll -= jnp.sum(jnp.diag(cholesky[0]))  # this should be faster than trace
         ll -= xs.shape[0] / 2.0 * jnp.log(2.0 * jnp.pi)
         return ll

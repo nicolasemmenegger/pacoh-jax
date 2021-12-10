@@ -28,13 +28,5 @@ class GeneralRegressionModuleFunctionality(unittest.TestCase):
     def __init__(self):
         super().__init__()
 
-
-class PacohSvgdGpOptionsTest:
-
-
-
-
-
-
 if __name__ == '__main__':
     unittest.main()

@@ -22,8 +22,7 @@ class SVGD:
             * in the meta-learning case, target_log_probs will take prior parameters and return an expected MLL + prior ll estimate
         """
         # a) score function
-        self.target_log_prob_batched = target_log_prob_batched
-        self.score = jax.grad(lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data)))
+        self.log_prob_and_score = jax.value_and_grad(lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data)))
 
         # b) kernel grad and matrix function
         def sum_cols_of_kernel(params):
@@ -50,7 +49,8 @@ class SVGD:
         as a function space gradient)
         """
         warnings.warn("some sort of rng will be needed in the meta-learning case")
-        score_val = self.score(particles, None, *data)  # shape (n, *p)
+
+        log_prob, score_val = self.log_prob_and_score(particles, None, *data)  # shape (n, *p)
         # (j, *ids) corresponds to grad_{x_j} p(x_j)
 
         kernel_mat_val = self.get_kernel_matrix(particles)  # shape (n,n)
@@ -68,13 +68,13 @@ class SVGD:
             return -res
 
         result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val)  # kernel_mat_val is symmetric
-        return result
+        return log_prob, result
 
     def step(self, particles, *data):
-        decrease = self.neg_phi_update(particles, *data)
+        log_prob, decrease = self.neg_phi_update(particles, *data)
         updates, self.optimizer_state = self.optimizer.update(decrease, self.optimizer_state, particles)
         particles = optax.apply_updates(particles, updates)
-        return particles
+        return log_prob, particles
 
 
 if __name__ == "__main__":

@@ -65,7 +65,7 @@ class JAXGaussianLikelihood(hk.Module):
 
     def log_prob(self, ys_true, ys_pred):
         scale = jnp.sqrt(self.variance())
-        logprob = Normal(scale=scale).log_prob(ys_true - ys_pred) # log likelihood of the data under the modeled variance
+        logprob = Normal(scale=scale).log_prob(ys_true - ys_pred)  # log likelihood of the data under the modeled variance
         return logprob
 
     def get_posterior_from_means(self, loc):

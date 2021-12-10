@@ -147,7 +147,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             output, gradients = batched_mll_value_and_grad(self.params, batched_states, apply_rngs, batched_xs, batched_ys)
             loss, states = output  # we don't actually need the states
 
-            # gradients = hk.data_structures.map(lambda _,__,x: 0.0, gradients) # zerograd
+            # gradients = hk.data_structures.map(lambda _,__,x: 0.0, gradients) # zero_grad
 
             # c) compute and apply optimizer updates
             updates, new_opt_state = self.optimizer.update(gradients, self.opt_state, self.params)

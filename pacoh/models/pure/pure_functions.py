@@ -98,11 +98,11 @@ def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_op
         # setup mean module
         if mean_option == 'NN':
             assert learning_mode in ['learn_mean', 'both'], 'neural network parameters must be learned'
-            mean_module = hk.nets.MLP(output_sizes=mean_nn_layers + (1,), activation=jax.nn.tanh)
+            mean_module = hk.nets.MLP(output_sizes=mean_nn_layers + (output_dim,), activation=jax.nn.tanh)
         elif mean_option == 'constant':
-            mean_module = JAXConstantMean()
+            mean_module = JAXConstantMean(output_dim=output_dim)
         elif mean_option == 'zero':
-            mean_module = JAXZeroMean()
+            mean_module = JAXZeroMean(output_dim=output_dim)
         elif callable(mean_option):
             assert isinstance(mean_option, JAXMean), "Invalid mean_module option"
             mean_module = mean_option

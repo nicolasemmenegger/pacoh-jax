@@ -2,7 +2,7 @@ import abc
 import time
 import warnings
 from abc import ABC, abstractmethod, ABCMeta
-from typing import Optional
+from typing import Optional, Union
 
 import jax
 from jax import numpy as jnp
@@ -11,7 +11,8 @@ import numpy as np
 
 
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, Sampler, MetaSampler
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, Sampler, MetaSampler, \
+    MetaDataLoaderTwoLevel, MetaDataLoaderOneLevel
 from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
 
 class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesABCMeta):
@@ -171,30 +172,32 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         assert all([self.input_dim == train_x.shape[-1] and self.output_dim == train_t.shape[-1]
                     for train_x, train_t in meta_train_data])
 
-    def _get_meta_batch_sampler(self, meta_tuples, task_batch_size, shuffle=True,
-                                minibatch_at_dataset_level=False, dataset_batch_size=None):
+    def _get_meta_dataloader(self,
+                             meta_tuples,
+                             task_batch_size,
+                             iterations = 2000,
+                             dataset_batch_size=-1,
+                             return_array=False) -> Union[MetaDataLoaderTwoLevel, MetaDataLoaderOneLevel]:
         """
         Returns an iterator to be used to sample minibatches from the dataset in the train loop
-        :param xs: The feature vectors
-        :param ys: The labels
-        :param batch_size: The size of the batches. If -1, will be the whole data set
-        :param shuffle: If this is true, we initially shuffle the data, and then iterate
-                        If it is false, we subsample each time the iterator gets queried
-        :return: a Sampler object (which is itself an iterator)
-        Notes:
-            expects the meta_tuples to be of the corect dimensionality
+        :param meta_tuples: meta train set
+        :param task_batch_size: num of train tasks per iterations. -1 means no batching
+        :param iterations: length of train loop with this dataloader
+        :param dataset_batch_size: number of data point per task
+        :param return_array: whether the return tyype of the dataloader should be a three dimensional
+        array (assumes batching or same size datasets, which could also be specified as -1).
+        :return: a pytorch.DataLoader
         """
         self._rng, sampler_key = jax.random.split(self._rng)
 
 
-        if  task_batch_size == -1:
+        if task_batch_size == -1:
             task_batch_size = len(meta_tuples)  # just use the whole dataset
         elif task_batch_size > 0:
             pass
         else:
             raise AssertionError('task batch size must be either positive or -1')
-
-        if minibatch_at_dataset_level:
+        if return_array:
             if dataset_batch_size == -1 or dataset_batch_size is None:
                 # check that they are all the same
                 lengths = [[xs.shape[0], ys.shape[0]] for xs, ys in meta_tuples]
@@ -207,8 +210,9 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
             else:
                 raise AssertionError('batch size must be either positive or -1')
 
-        return MetaSampler(meta_tuples, task_batch_size, sampler_key, shuffle,
-                           minibatch_at_dataset_level, dataset_batch_size)
+            return MetaDataLoaderTwoLevel(meta_tuples, task_batch_size, dataset_batch_size, iterations)
+        else:
+            return MetaDataLoaderOneLevel(meta_tuples, task_batch_size, iterations)
 
     @abstractmethod
     def _meta_step(self, xs_tasks, ys_tasks):
