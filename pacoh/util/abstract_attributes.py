@@ -4,6 +4,7 @@ def abstractattribute(func):
     func.__is_abstract_attribute__ = True
     return func
 
+
 class AbstractAttributesABCMeta(ABCMeta):
     def __call__(cls, *args, **kwargs):
         # taken from https://stackoverflow.com/questions/23831510/abstract-attribute-not-property

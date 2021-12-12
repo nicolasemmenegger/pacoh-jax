@@ -31,10 +31,12 @@ class DataLoaderTest(unittest.TestCase):
         self.assertEqual(count, self.num_batches_i_want)
 
     def test_batch_size(self):
-        for batch in self.dataloader_one:
-            self.assertEqual(len(batch), self.task_batch_size)
+        for xs_batch, ys_batch in self.dataloader_one:
+            self.assertEqual(len(xs_batch), self.task_batch_size)
+            self.assertEqual(len(ys_batch), self.task_batch_size)
             shapes = [(xs.shape, ys.shape) for xs, ys in self.meta_tuples]
-            for xs, ys in batch:
+
+            for xs, ys in zip(xs_batch, ys_batch):
                 self.assertIn((xs.shape, ys.shape), shapes)
 
         for xs, ys in self.dataloader_two:

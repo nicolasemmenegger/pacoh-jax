@@ -54,11 +54,10 @@ class DataNormalizer:
         Normalizes the data according to the stored statistics and returns the normalized data
         Assumes the data already has the correct dimensionality.
         """
-        # # TODO rermove
-        if ys is None:
-            return xs
-        else:
-            return xs, ys
+        # if ys is None:
+        #     return xs
+        # else:
+        #     return xs, ys
 
         if self.turn_off_normalization:
             if ys is None:
@@ -67,7 +66,6 @@ class DataNormalizer:
                 return xs, ys
 
         xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :]
-
         if ys is None:
             return xs_normalized
         else:
@@ -91,11 +89,12 @@ def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
     Important note: when applying this decorator to a method, the resulting method is extended with the argument
         return_density, defaulting to the value True
     """
-    return predict_fn
-    def f(x, b=True):
-        return predict_fn(x)
 
-    return f
+    # # This is dummy with no normalization
+    # def f(self, x, return_density=True):
+    #     return predict_fn(self, handle_batch_input_dimensionality(x))
+    #
+    # return f
 
 
     def normalized_predict(self, test_x, return_density=True, *args):
@@ -108,6 +107,7 @@ def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
         else:
             mean = jnp.zeros_like(self._normalizer.y_mean)
             std = jnp.ones_like(self._normalizer.y_std)
+
 
         pred_dist_transformed = AffineTransformedDistribution(pred_dist,
                                                               normalization_mean=mean,
@@ -223,7 +223,14 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
         :param iterations: The number of batches to deliver. Should correspond to the num_iter of the train loop
         """
         sampler = torch_data.RandomSampler(meta_tuples, replacement=True, num_samples=iterations*task_batch_size)
-        super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=lambda batch: batch)
+        def unzip_collate(batch):
+            # batch is a list of tuples of arrays
+            # want: a tuple of lists of arrays
+            xs_list = [xs for xs, _ in batch]
+            ys_list = [ys for _, ys in batch]
+            return xs_list, ys_list
+
+        super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=unzip_collate)
 
 def handle_point_input_dimensionality(self, x, y):
     if x.ndim == 1:

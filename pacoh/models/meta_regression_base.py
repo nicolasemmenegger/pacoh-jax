@@ -11,8 +11,8 @@ import numpy as np
 
 
 from pacoh.models.regression_base import RegressionModel
-from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, Sampler, MetaSampler, \
-    MetaDataLoaderTwoLevel, MetaDataLoaderOneLevel
+from pacoh.util.data_handling import handle_batch_input_dimensionality, DataNormalizer, MetaDataLoaderTwoLevel, \
+    MetaDataLoaderOneLevel
 from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
 
 class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesABCMeta):
@@ -54,7 +54,6 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
             self._normalizer = None  # make sure we only set the normalizer based on the meta-tuples
         self.fitted = False
 
-
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
         """
         :param meta_train_tuples:
@@ -68,41 +67,40 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
             at the task level).
         """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
-        warnings.warn("there has to be a correcterr way to do norrmalisation")
         if self._provided_normaliser is None:
             self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True)
             warnings.warn("check if normalization is correct here")
 
         self._check_meta_data_shapes(meta_train_tuples)
+        num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
         meta_train_tuples = self._normalizer.handle_meta_tuples(meta_train_tuples)
-        meta_batch_sampler = self._get_meta_batch_sampler(meta_train_tuples,
-                                                          self._task_batch_size,
-                                                          shuffle=True,
-                                                          minibatch_at_dataset_level=self._minibatch_at_dataset_level,
-                                                          dataset_batch_size=self._dataset_batch_size)
+        dataloader = self._get_meta_dataloader(meta_train_tuples,
+                                               self._task_batch_size,
+                                               iterations=num_iter_fit,
+                                               return_array=self._minibatch_at_dataset_level,
+                                               dataset_batch_size=self._dataset_batch_size)
 
         t = time.time()
         loss_list = []
-        num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
         pbar = trange(num_iter_fit)
 
-        for i in pbar:
-            # a) choose a minibatch.
+        for i, batch in zip(pbar, dataloader):
+            # a) choose a minibatch
             # train_batch_sampler returns one of the following:
             # - 2 lists of size task_batch_size of xs and ys each of variable sizes
             # - an array of size (task_batch_size, data_set_batch_size, {input_dim or output_dim resp.})
-            xs_task_list, ys_task_list = next(meta_batch_sampler)
-            loss = self._meta_step(xs_task_list, ys_task_list)
+            loss = self._meta_step(batch)
             loss_list.append(loss)
+            pbar.set_postfix(dict(loss=loss))
 
-            if i % log_period == 0:
-                loss = jnp.mean(jnp.array(loss_list))
-                loss_list = []
-                message = dict(loss=loss, time=time.time() - t)
-                if meta_valid_tuples is not None:
-                    agg_metric_dict = self.eval_datasets(meta_valid_tuples)
-                    message.update(agg_metric_dict)
-                pbar.set_postfix(message)
+            # if i % log_period == 0:
+            #     loss = jnp.mean(jnp.array(loss_list))
+            #     loss_list = []
+            #     message = dict(loss=loss, time=time.time() - t)
+            #     if meta_valid_tuples is not None:
+            #         agg_metric_dict = self.eval_datasets(meta_valid_tuples)
+            #         message.update(agg_metric_dict)
+            #     pbar.set_postfix(message)
 
         self.fitted = True
 
@@ -110,7 +108,7 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         """Convenience method that does a target_fit followed by a target_predict"""
         self._clear_data()
         self.add_data_points(context_x, context_y, refit=True)
-        return self.predict(test_x)
+        return self.predict(test_x, return_density=return_density)
 
     def eval_datasets(self, test_tuples, **kwargs):
         """
@@ -190,7 +188,6 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         """
         self._rng, sampler_key = jax.random.split(self._rng)
 
-
         if task_batch_size == -1:
             task_batch_size = len(meta_tuples)  # just use the whole dataset
         elif task_batch_size > 0:
@@ -215,5 +212,6 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
             return MetaDataLoaderOneLevel(meta_tuples, task_batch_size, iterations)
 
     @abstractmethod
-    def _meta_step(self, xs_tasks, ys_tasks):
+    def _meta_step(self, mini_batch) -> float:
+        """ should return some loss to display """
         pass

@@ -19,7 +19,7 @@ from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME, POSITI
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.distributions import get_mixture
 from pacoh.modules.means import JAXMean
-from pacoh.modules.kernels import JAXKernel, pytree_rbf_set, get_pytree_rbf_fn
+from pacoh.modules.kernels import JAXKernel, get_pytree_rbf_fn
 from pacoh.util.initialization import initialize_batched_model_with_state
 
 from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
@@ -36,11 +36,11 @@ construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(cons
 
 def foo(mod_name: str, name: str, value):
     if mod_name == "jax_gaussian_likelihood/~/PositiveParameter":
-        return value * 0.0 + -2.99573
+        return value * 0.0 + -2.0
     elif mod_name == "jaxrbf_kernel/~/LengthScale":
-        return value * 0.0 - 1.0
+        return value * 0.0 - 1.1
     elif mod_name == "jaxrbf_kernel/~/OutputScale":
-        return value * 0.0 + 0.693147
+        return value * 0.0 + 0.5
     else:
         assert False, "boum"
 
@@ -48,10 +48,11 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
     def __init__(self,
                  # sizing options
                  input_dim: int, output_dim: int, feature_dim: int = 2, num_tasks: int = None,
-                 # hyperprior specification
+                 # hyperprior structure specification
                  covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
                  mean_module: Union[str, Callable[[], JAXMean]] = 'NN', learning_mode: str = 'both',
                  mean_nn_layers: Collection[int] = (32, 32),  kernel_nn_layers: Collection[int] = (32, 32),
+                 # hyperprior detailed specification
                  weight_prior_std=0.5, bias_prior_std: float = 3.0, likelihood_prior_mean: float = 0.01,
                  likelihood_prior_std: float = 0.1, kernel_prior_mean: float = 1.0, kernel_prior_std: float = 1.0,
                  mean_module_prior_mean: float = 1.0, mean_module_prior_std: float = 1.0, learn_likelihood: bool = True,
@@ -93,6 +94,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self._single_empty_state = pytree_unstack(self._empty_states)
 
         def mean_std_map(mod_name: str, name: str, _: jnp.array):
+            return 0.0, 1.0
             # for each module and parameter, we can specify custom mean and std for the hyperprior
             transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
             # transform positive parameters to log_scale for storage
@@ -130,10 +132,11 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         def target_post_prob_batched(hyper_posterior_particles, rngs, *data, mll_many_many):
             # mll_many_many is expected to produce a matrix (i,j) |-> ln(Z(S_j,P_i)) where
             meta_xs, meta_ys = data
-            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, None, meta_xs, meta_ys)[0] # this will have size Kxtask_batch
+            # this will have size K x task_batch
+            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, None, meta_xs, meta_ys)[0]
             batch_data_likelihood_per_particle = jnp.sum(mll_matrix, axis=0) * num_tasks/task_batch_size
             hyperprior_log_prob = GaussianBelief.log_prob(self.hyperprior, hyper_posterior_particles)
-            return batch_data_likelihood_per_particle - prior_weight * hyperprior_log_prob
+            return batch_data_likelihood_per_particle # - prior_weight * hyperprior_log_prob
 
         # f) setup the optimizer
         if lr_decay < 1.0:
@@ -141,11 +144,14 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         else:
             self.lr_scheduler = optax.constant_schedule(lr)
 
-        if optimizer == "SGD":
-            self.optimizer = optax.sgd(self.lr_scheduler)
-        else:
-            self.optimizer = optax.adam(self.lr_scheduler)
-        warnings.warn("implement adamw, with weight decay?")
+        # if optimizer == "SGD":
+        #     self.optimizer = optax.sgd(self.lr_scheduler)
+        # else:
+        #     self.optimizer = optax.adam(self.lr_scheduler)
+        #     # mask weight decay for log_scale parameters
+        self.mask_fn = functools.partial(hk.data_structures.map,
+                                         lambda _, name, __: name != '__positive_log_scale_param')
+        self.optimizer = optax.adamw(self.lr_scheduler, weight_decay=weight_decay, mask=self.mask_fn)
         self.optimizer_state = self.optimizer.init(self.particles)
 
         # g) thread together svgd
@@ -156,7 +162,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
         super().meta_fit(meta_train_tuples, meta_valid_tuples, log_period=log_period, num_iter_fit=num_iter_fit)
 
-    def _meta_step(self, xs_tasks, ys_tasks):
+    def _meta_step(self, minibatch):
+        xs_tasks, ys_tasks = minibatch
         log_prob, self.particles = self.svgd.step(self.particles, xs_tasks, ys_tasks)
         return log_prob
 
@@ -170,6 +177,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
     @normalize_predict
     def predict(self, xs):
+        print(self._states)
         pred_dist, _ = self._apply.base_learner_predict(self.particles, self._states, None, xs)
         return get_mixture(pred_dist, self._num_particles)
 
@@ -202,15 +210,13 @@ if __name__ == "__main__":
 
     print('\n ---- GPR mll meta-learning ---- ')
 
-    torch.set_num_threads(2)
+    for weight_decay in [1.0]:
+        # pacoh_svgd = PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay,
+        #                            task_batch_size=5, covar_module='SE', mean_module='zero', num_particles=1)
 
-    for weight_decay in [0.0]:
-        pacoh_svgd = PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay,
-                                   task_batch_size=20, covar_module='SE', mean_module='zero', num_particles=10)
-
-        # PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay, task_batch_siz e=2,
-        #               covar_module='SE', mean_module='zero', mean_nn_layers=NN_LAYERS, feature_dim=2,
-        #               kernel_nn_layers=NN_LAYERS)
+        pacoh_svgd = PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
+                      covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
+                      kernel_nn_layers=NN_LAYERS)
 
 
         itrs = 0
@@ -218,7 +224,7 @@ if __name__ == "__main__":
 
         for i in range(40):
             n_iter = 500
-            pacoh_svgd.meta_fit(meta_train_data, log_period=1000, num_iter_fit=n_iter)
+            pacoh_svgd.meta_fit(meta_train_data, log_period=100, num_iter_fit=n_iter)
 
             itrs += n_iter
 
@@ -233,9 +239,7 @@ if __name__ == "__main__":
             plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
             plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
-            # lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
-            print(pacoh_svgd.particles)
-            # plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
+            #lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
+            #plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
-            print("sjhadflökasdjflkajsfölkakafj")
             plt.show()
