@@ -1,8 +1,11 @@
+import functools
+import warnings
 from typing import Callable, Tuple, List, Union
 
 import jax
 import jax.numpy as jnp
 import haiku as hk
+import optax
 
 from pacoh.util.tree import pytree_unstack
 
@@ -59,3 +62,32 @@ def initialize_batched_model_with_state(init, n_models, prng_key, *shapes) -> Tu
     params, states = _call_init_batched(init, n_models, prng_key, *shapes)
     param_template = pytree_unstack(params)[0]
     return params, param_template, states
+
+
+def initialize_optimizer(optimizer, lr, parameters, lr_decay=None, mask_fn=None, weight_decay=None):
+    # check options
+    if mask_fn is not None:
+        assert optimizer == "AdamW", "mask not supported for any other option than ADAMW"
+
+    if weight_decay is not None and optimizer != "AdamW":
+        warnings.warn("weight decay only applies for AdamW")
+
+    # scheduler object
+    if lr_decay < 1.0:
+        lr_scheduler = optax.exponential_decay(lr, 1000, decay_rate=lr_decay, staircase=True)
+    else:
+        lr_scheduler = optax.constant_schedule(lr)
+
+    # optimizer object
+    if optimizer == "SGD":
+        opt = optax.sgd(lr_scheduler)
+    elif optimizer == "Adam":
+        opt = optax.adam(lr_scheduler)
+    elif optimizer == "AdamW":
+        if mask_fn is None:
+            mask_fn = functools.partial(hk.data_structures.map,
+                                        lambda _, name, __: name != '__positive_log_scale_param')
+        opt = optax.adamw(lr_scheduler, weight_decay=weight_decay, mask=mask_fn)
+
+    optimizer_state = opt.init(parameters)
+    return opt, optimizer_state

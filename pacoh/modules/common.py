@@ -14,6 +14,6 @@ class PositiveParameter(hk.Module):
             self.shape = initial_value.shape
 
     def __call__(self):
-        exponentiated = jnp.exp(hk.get_parameter("__positive_log_scale_param", dtype=jnp.float32, shape=self.shape,
+        exponentiated = jnp.exp(hk.get_parameter("__positive_log_scale_param", shape=self.shape,
                                                  init=hk.initializers.Constant(self.raw_init)))
         return exponentiated + self.boundary_value

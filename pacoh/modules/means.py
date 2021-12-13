@@ -25,7 +25,7 @@ class JAXConstantMean(JAXMean):
 
     def __call__(self, xs):
         # works for both batch or unbatched
-        mean = hk.get_parameter("mu", shape=[self.output_dim], dtype=jnp.float32,
+        mean = hk.get_parameter("mu", shape=[self.output_dim],
                                 init=hk.initializers.Constant(self.init_constant))
         return jnp.ones(xs.shape[:-1] + (self.output_dim,)) * mean
 

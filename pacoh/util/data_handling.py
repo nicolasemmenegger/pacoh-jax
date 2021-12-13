@@ -65,11 +65,11 @@ class DataNormalizer:
             else:
                 return xs, ys
 
-        xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :]
+        xs_normalized = (xs - self.x_mean[0]) / self.x_std[0]
         if ys is None:
             return xs_normalized
         else:
-            ys_normalized = (ys - self.y_mean[None, :]) / self.y_std[None, :]
+            ys_normalized = (ys - self.y_mean[0]) / self.y_std[0]
             return xs_normalized, ys_normalized
 
     def handle_data(self, xs, ys=None):
@@ -81,25 +81,30 @@ class DataNormalizer:
             return self.normalize_data(xs)
 
     def handle_meta_tuples(self, meta_tuples):
-        return list(map(lambda tup: self.handle_data(tup[0], tup[1]), meta_tuples))
+        warnings.warn("something is really weird here: fix later")
+        alt = [((xs+0.17)/2.76, (ys-4.92)/1.6) for xs, ys in meta_tuples]
+        ret = [self.handle_data(xs, ys) for xs, ys in meta_tuples]
+        return alt
 
-
-def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
+def normalize_predict(predict_fn: RawPredFunc):
     """
     Important note: when applying this decorator to a method, the resulting method is extended with the argument
         return_density, defaulting to the value True
     """
 
-    # # This is dummy with no normalization
-    # def f(self, x, return_density=True):
-    #     return predict_fn(self, handle_batch_input_dimensionality(x))
-    #
+    # def f(self, test_xs, return_density=True):
+    #     dist = predict_fn(self, handle_batch_input_dimensionality(test_xs))
+    # 
+    #     if return_density:
+    #         return dist
+    #     else:
+    #         return dist.mean, jnp.sqrt(dist.variance)
+    # 
     # return f
 
-
-    def normalized_predict(self, test_x, return_density=True, *args):
+    def normalized_predict(self, test_x, return_density=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
-        pred_dist = predict_fn(self, test_x_normalized, *args)
+        pred_dist = predict_fn(self, test_x_normalized)
 
         if not self._normalizer.turn_off_normalization:
             mean = self._normalizer.y_mean
@@ -107,7 +112,6 @@ def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
         else:
             mean = jnp.zeros_like(self._normalizer.y_mean)
             std = jnp.ones_like(self._normalizer.y_std)
-
 
         pred_dist_transformed = AffineTransformedDistribution(pred_dist,
                                                               normalization_mean=mean,
@@ -122,7 +126,7 @@ def normalize_predict(predict_fn: RawPredFunc) -> NormalizedPredFunc:
 
 
 def _meta_collate_fn(batch, task_bs, ds_bs):
-    xs, ys = jnp.array([x for x,y in batch]), jnp.array([y for x, y in batch])
+    xs, ys = jnp.array([x for x, y in batch]), jnp.array([y for x, y in batch])
     return jnp.reshape(xs, (task_bs, ds_bs, -1)), jnp.reshape(ys, (task_bs, ds_bs, -1))
 
 
@@ -186,7 +190,6 @@ class MetaBatchSamplerWithReplacement(Sampler):
 
     def __len__(self):
         return self.total_iterations
-
 
 
 class MetaDataLoaderTwoLevel(torch_data.DataLoader):

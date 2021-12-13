@@ -45,11 +45,9 @@ class SVGD:
         """
         :param particles: A pytree of particles, where there are num_particles in the first dimension of the leaves
         :param data: A batch of data to evaluate the likelihood on
-        :return: A pytree of the same shape as particles, corresponding to the update applied to it (can be interpreted
+        :return: A tuple comprised of the loss and A pytree of the same shape as particles, corresponding to the update applied to it (can be interpreted
         as a function space gradient)
         """
-        warnings.warn("some sort of rng will be needed in the meta-learning case")
-
         log_prob, score_val = self.log_prob_and_score(particles, None, *data)  # shape (n, *p)
         # (j, *ids) corresponds to grad_{x_j} p(x_j)
 
@@ -68,13 +66,13 @@ class SVGD:
             return -res
 
         result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val)  # kernel_mat_val is symmetric
-        return log_prob, result
+        return -log_prob, result
 
     def step(self, particles, *data):
-        log_prob, decrease = self.neg_phi_update(particles, *data)
+        loss, decrease = self.neg_phi_update(particles, *data)
         updates, self.optimizer_state = self.optimizer.update(decrease, self.optimizer_state, particles)
         particles = optax.apply_updates(particles, updates)
-        return log_prob, particles
+        return loss, particles
 
 
 if __name__ == "__main__":

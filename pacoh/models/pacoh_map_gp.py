@@ -11,7 +11,7 @@ import torch
 from jax import numpy as jnp
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
-from pacoh.models.pure.pure_functions import construct_pacoh_map_forward_fns
+from pacoh.models.pure.pure_functions import construct_gp_base_learner
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean
@@ -45,8 +45,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
 
         """-------- Setup haiku differentiable functions and parameters -------"""
-        pacoh_map_closure = construct_pacoh_map_forward_fns(input_dim, output_dim, mean_module, covar_module,
-                                                            learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers)
+        pacoh_map_closure = construct_gp_base_learner(input_dim, output_dim, mean_module, covar_module,
+                                                      learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers)
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
         self.particle, empty_state = initialize_model_with_state(init_fn, init_key, (task_batch_size, input_dim))

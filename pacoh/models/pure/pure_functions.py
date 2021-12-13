@@ -79,10 +79,11 @@ def construct_bnn_forward_fns(output_dim, hidden_layer_sizes, activation,
     return factory
 
 
-def construct_pacoh_map_forward_fns(input_dim, output_dim, mean_option, covar_option, learning_mode,
-                                    feature_dim, mean_nn_layers, kernel_nn_layers, learn_likelihood=True, initial_noise_std=1.0):
+def construct_gp_base_learner(input_dim, output_dim, mean_option, covar_option, learning_mode,
+                              feature_dim, mean_nn_layers, kernel_nn_layers, learn_likelihood=True,
+                              initial_noise_std=1.0):
     def factory():
-        """The arguments here are what _setup_gp_prior had. Maybe they need to be factories tho"""
+        """The arguments here are what _setup_gp_prior had."""
         # setup kernel module
         if covar_option == 'NN':
             assert learning_mode in ['learn_kernel', 'both'], 'neural network parameters must be learned'

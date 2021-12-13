@@ -1,7 +1,6 @@
-import abc
 import time
 import warnings
-from abc import ABC, abstractmethod, ABCMeta
+from abc import abstractmethod
 from typing import Optional, Union
 
 import jax
@@ -69,7 +68,12 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         if self._provided_normaliser is None:
             self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True)
-            warnings.warn("check if normalization is correct here")
+            # print("x_std:", self._normalizer.x_std)
+            # print("y_std:", self._normalizer.y_std)
+            # print("x_mean:", self._normalizer.x_mean)
+            # print("y_mean:", self._normalizer.y_mean)
+            self._provided_normaliser = self._normalizer
+
 
         self._check_meta_data_shapes(meta_train_tuples)
         num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
@@ -80,27 +84,25 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
                                                return_array=self._minibatch_at_dataset_level,
                                                dataset_batch_size=self._dataset_batch_size)
 
-        t = time.time()
-        loss_list = []
-        pbar = trange(num_iter_fit)
+        #if meta_valid_tuples is not None:
+            # meta_valid_tuples = self._normalizer.handle_meta_tuples(meta_valid_tuples)
 
-        for i, batch in zip(pbar, dataloader):
-            # a) choose a minibatch
-            # train_batch_sampler returns one of the following:
-            # - 2 lists of size task_batch_size of xs and ys each of variable sizes
-            # - an array of size (task_batch_size, data_set_batch_size, {input_dim or output_dim resp.})
-            loss = self._meta_step(batch)
-            loss_list.append(loss)
-            pbar.set_postfix(dict(loss=loss))
-
-            # if i % log_period == 0:
-            #     loss = jnp.mean(jnp.array(loss_list))
-            #     loss_list = []
-            #     message = dict(loss=loss, time=time.time() - t)
-            #     if meta_valid_tuples is not None:
-            #         agg_metric_dict = self.eval_datasets(meta_valid_tuples)
-            #         message.update(agg_metric_dict)
-            #     pbar.set_postfix(message)
+        p_bar = trange(num_iter_fit)
+        avg_loss = 0.0
+        message = {}
+        for i, batch in zip(p_bar, dataloader):
+            instantaneous_loss = self._meta_step(batch)
+            itr = (i % log_period) + 1
+            avg_loss = (itr-1)/itr*avg_loss + 1/itr*instantaneous_loss  # running average of loss over log_period
+            message['loss'] = avg_loss
+            p_bar.set_postfix(message)
+            if i % log_period == 0:
+                message = dict(loss=avg_loss)
+                if meta_valid_tuples is not None:
+                    agg_metric_dict = self.eval_datasets(meta_valid_tuples)
+                    message.update(agg_metric_dict)
+                p_bar.set_postfix(message)
+                avg_loss = 0.0
 
         self.fitted = True
 
@@ -123,14 +125,15 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         """
         assert (all([len(valid_tuple) == 4 for valid_tuple in test_tuples]))
 
-        ll, rmse, calib, chi2 = list(zip(*[self.meta_eval(*test_data_tuple, **kwargs)
-                                           for test_data_tuple in test_tuples]))
+        results = [self.meta_eval(*test_data_tuple, **kwargs) for test_data_tuple in test_tuples]
+        results_tup = [(res['avg. ll'], res['rmse'], res['calib err.'], res['calib err. chi2']) for res in results]
+        ll, rmse, calib, chi2 = zip(*results_tup)
 
         return {
-            'avg. ll': jnp.mean(ll),
-            'rmse': jnp.mean(rmse),
-            'calib err.': jnp.mean(calib),
-            'calib err. chi2': jnp.mean(chi2)
+            'avg. ll': jnp.mean(jnp.array(ll)),
+            'rmse': jnp.mean(jnp.array(rmse)),
+            'calib err.': jnp.mean(jnp.array(calib)),
+            'calib err. chi2': jnp.mean(jnp.array(chi2))
         }
 
     def meta_eval(self,  context_xs, context_ys, test_xs, test_ys):
@@ -173,7 +176,7 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
     def _get_meta_dataloader(self,
                              meta_tuples,
                              task_batch_size,
-                             iterations = 2000,
+                             iterations=2000,
                              dataset_batch_size=-1,
                              return_array=False) -> Union[MetaDataLoaderTwoLevel, MetaDataLoaderOneLevel]:
         """
