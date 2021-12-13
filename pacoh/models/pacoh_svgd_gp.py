@@ -191,8 +191,8 @@ if __name__ == "__main__":
 
     for weight_decay in [0.5]:
         pacoh_svgd = PACOH_SVGD_GP(1, 1, num_tasks=n_tasks, learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
-                      covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2, svgd_kernel_bandwidth=1000.,
-                      kernel_nn_layers=NN_LAYERS, num_particles=4, learn_likelihood=True)
+                      covar_module='NN', mean_module='constant', mean_nn_layers=NN_LAYERS, feature_dim=2, svgd_kernel_bandwidth=1000.,
+                      kernel_nn_layers=NN_LAYERS, num_particles=20, learn_likelihood=True)
 
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
@@ -212,7 +212,7 @@ if __name__ == "__main__":
             plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
             plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
-            lcb, ucb = pred_mean-pred_std, pred_mean + pred_std #  pacoh_svgd.confidence_intervals(x_plot)
+            lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
             plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()

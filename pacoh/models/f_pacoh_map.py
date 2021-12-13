@@ -6,13 +6,16 @@ from typing import Callable, Collection, Union
 import haiku as hk
 import jax.random
 import numpy as np
+import numpyro.distributions
 import optax
 import torch
 from jax import numpy as jnp
+from numpyro.distributions import Uniform
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
+from pacoh.modules.domain import ContinuousDomain, DiscreteDomain
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel
@@ -20,10 +23,11 @@ from pacoh.util.initialization import initialize_model_with_state, initialize_op
 from pacoh.util.tree import pytree_unstack
 
 
-class PACOH_MAP_GP(RegressionModelMetaLearned):
+class F_PACOH_MAP_GP(RegressionModelMetaLearned):
     def __init__(self,
                  input_dim: int,
                  output_dim: int,
+                 domain: Union[DiscreteDomain, ContinuousDomain],
                  learning_mode: str = 'both',
                  weight_decay: float = 0.0,
                  feature_dim: int = 2,
@@ -36,11 +40,18 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
                  prior_weight=1e-3,
+                 train_data_in_kl=False, # whether to reuse the training set to evaluate the kl at
+                 num_samples_kl=20,
+                 prior_lengthscale=0.2,
+                 prior_outputscale=2.0,
+                 prior_kernel_noise=1e-3,
                  normalize_data: bool = True,
                  normalizer: DataNormalizer = None,
                  random_state: jax.random.PRNGKey = None):
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state, task_batch_size, num_tasks)
 
+        assert isinstance(domain, ContinuousDomain) or isinstance(domain, DiscreteDomain)
+        assert domain.d == input_dim, "Domain and input dimension don't match"
         assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla_gp'], 'Invalid learning mode'
         assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
         assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
@@ -65,22 +76,31 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             """ Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
             number of elements of shape [input_size]. Similarly for meta_ys
             """
-            total_mll = 0.0
+            loss = 0.0
             for xs, ys in zip(meta_xs_batch, meta_ys_batch):
+                # marginal ll
                 mll, state = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
-                total_mll -= mll
 
-            # log_prob assumes a batch of instances
-            reg = GaussianBelief.log_prob(self.hyperprior, jax.tree_map(lambda v: jnp.expand_dims(v, 0), particle))
-            return total_mll - prior_weight*jnp.sum(reg)
+                kl = self._functional_kl(particle, state, xs, ys)  # the functional kl of the prior and posterior of the base learner I guess
+                n = num_tasks
+                m = xs.shape[0]
+
+                loss += - mll / (task_batch_size * m) + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
+
+            return loss
+
 
         def target_log_prob_array(particle, meta_xs, meta_ys):
-            """ meta_{xs, ys} are both three dimensional jnp.arrays -> which enables vmapping the train loop over tasks
-            """
             pass
 
         self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob))
 
+        # f-pacoh specific initialisation
+        self.domain_dist = Uniform(low=domain.l, high=domain.u)
+        self.train_data_in_kl = train_data_in_kl
+        self.num_samples_kl = num_samples_kl
+
+        # optimizer setup
         self.optimizer, self.optimizer_state = initialize_optimizer("AdamW", lr, self.particle,
                                                                     lr_decay, weight_decay=weight_decay)
 
@@ -103,6 +123,56 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
                                                          None,
                                                          self._xs_data,
                                                          self._ys_data)
+
+    def _sample_measurement_set(self, xs_train):
+        if self.train_data_in_kl:
+            n_train_x = min(xs_train.shape[0], self.num_samples_kl // 2)
+            n_rand_x = self.num_samples_kl - n_train_x
+            idx_rand = np.random.choice(xs_train.shape[0], n_train_x)
+            xs_kl = torch.cat([xs_train[idx_rand], self.domain_dist.sample((n_rand_x,))], dim=0)
+        else:
+            xs_kl = self.domain_dist.sample((self.num_samples_kl,))
+
+        assert xs_kl.shape == (self.num_samples_kl, self.input_dim)
+        return xs_kl
+
+    def _functional_kl(self, particle, state, xs, ys):
+        """
+        Computes the approximation of the functional kl divergence by subsampling
+        :param particle: The parameters of the hyperposterior/prior
+        :param state: The state of the fitted model from estimating the mll
+        :param xs: The dataset to fit
+        :param ys: The dataset to fit
+        :return:
+        evaluate the kl of the predictive distributions of prior and posterior
+        """
+        # sample / construct measurement set
+        xs_kl = self._sample_measurement_set(xs)
+
+        # functional KL
+        # TODO check that this is really not needed anymore, if no, can get rid of ys argument
+        # _, state = self._apply_fns.base_learner_fit(xs, ys)
+        pred_posterior, _ = self._apply_fns.base_learner_predict(particle, state, None, xs_kl)
+        pred_prior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
+
+        warnings.warn("I should implement an option to return the full posterior")
+        return numpyro.distributions.kl_divergence(pred_posterior, pred_prior)
+
+        # K_prior = torch.reshape(self.prior_covar_module(x_kl).evaluate(), (x_kl.shape[0], x_kl.shape[0]))
+        #
+        # inject_noise_std = self.prior_kernel_noise
+        # error_counter = 0
+        # while error_counter < 5:
+        #     try:
+        #         dist_f_prior = MultivariateNormal(torch.zeros(x_kl.shape[0]), K_prior + inject_noise_std * torch.eye(x_kl.shape[0]))
+        #         return kl_divergence(dist_f_posterior, dist_f_prior)
+        #     except RuntimeError as e:
+        #         import warnings
+        #         inject_noise_std = 2 * inject_noise_std
+        #         error_counter += 1
+        #         warnings.warn('encoundered numerical error in computation of KL: %s '
+        #                       '--- Doubling inject_noise_std to %.4f and trying again' % (str(e), inject_noise_std))
+        # raise RuntimeError('Not able to compute KL')
 
 
 if __name__ == "__main__":
@@ -135,7 +205,7 @@ if __name__ == "__main__":
     torch.set_num_threads(2)
 
     for weight_decay in [0.5]:
-        pacoh_map = PACOH_MAP_GP(1, 1, learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
+        pacoh_map = F_PACOH_MAP_GP(1, 1, ContinuousDomain(-6, 6), learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
                                  num_tasks=num_train_tasks,
                                 covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)

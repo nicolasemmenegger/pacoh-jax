@@ -104,10 +104,10 @@ class JAXExactGP:
         # computes the marginal log-likelihood of ys given xs and a posterior
         # computed on (xs,ys). This is differentiable and uses no stats
         ys_centered = self._ys_centered(xs, ys)
-        # testing purposes TODO remove
 
         data_cov_w_noise = self._data_cov_with_noise(xs)  # more noise
         cholesky = cho_factor(data_cov_w_noise)
+        hk.set_state("cholesky", cholesky[0])
         alpha = cho_solve(cholesky, ys_centered)
         f1 = ys_centered.flatten()
         f2 = alpha.flatten()
