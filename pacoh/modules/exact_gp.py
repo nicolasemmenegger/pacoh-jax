@@ -1,9 +1,13 @@
 import functools
 
 import numpyro.distributions
+from numpyro.distributions import MultivariateNormal, Normal, Independent
+from pacoh.modules.distributions import get_diagonal_gaussian
+
 from jax import numpy as jnp
 from jax.scipy.linalg import cho_solve, cho_factor
 import haiku as hk
+
 
 class JAXExactGP:
     """
@@ -32,8 +36,8 @@ class JAXExactGP:
         """Haiku initialiser"""
         hk.set_state("xs", jnp.zeros((0, 1), dtype=jnp.float32))
         hk.set_state("ys", jnp.zeros((0,), dtype=jnp.float32))
-        hk.set_state("cholesky", (jnp.zeros((0, 0), dtype=jnp.float32), True))
-        return self.likelihood(self._prior(dummy_xs))
+        hk.set_state("cholesky", jnp.zeros((0, 0), dtype=jnp.float32))
+        return self.likelihood(self.prior(dummy_xs))
 
     def _ys_centered(self, xs, ys):
         return ys - self.mean_module(xs)
@@ -49,48 +53,62 @@ class JAXExactGP:
         data_cov_w_noise = self._data_cov_with_noise(xs)
         hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True)[0])
 
-    @functools.partial(hk.vmap, in_axes=(None, 0))
-    def posterior(self, x: jnp.ndarray):
+    # @functools.partial(hk.vmap, in_axes=(None, 0))
+    def posterior(self, xs_test: jnp.ndarray, return_full_covariance=True):
         xs = hk.get_state("xs", dtype=jnp.float32)
         ys = hk.get_state("ys", dtype=jnp.float32)
         chol = hk.get_state("cholesky", dtype=jnp.float32)
 
-        def has_data(operand):
-            # we have data
-            x, xs, chol = operand
-            new_cov_row = self.cov_vec_set(x, xs)
-            ys_cent = self._ys_centered(xs, ys).flatten()
-            cho_sol = cho_solve((chol, True), ys_cent)
-            mean = self.mean_module(x) + jnp.dot(new_cov_row.flatten(), cho_sol)
-            var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
-            std = jnp.sqrt(var)
-            return numpyro.distributions.Normal(loc=mean, scale=jnp.ones((1,))*std)
-
-        def no_data(operand):
-            x, _, __ = operand
-            return self._prior(x)
-
-        # warning: this is quite confusing. I had this as a jax.lax.cond/hk.cond, but because the distinction
-        # is on the size of xs, we cannot use these constructs, because they exactly assume that the size of
-        # the inputs of both branches is the same
         if xs.size > 0:
-            return has_data((x, xs, chol))
+            test_train_cov = self.cov_set_set(xs_test, xs) # TODO if something goes wrong, this shape is off
+
+            # mean prediction
+            ys_cent = self._ys_centered(xs, ys).flatten()
+            mean = self.mean_module(xs_test).flatten() + test_train_cov @ cho_solve((chol, True), ys_cent)
+
+
+
+            if return_full_covariance:
+                # full covariance information
+                cov = self.cov_set_set(xs_test, xs_test)
+                cov -= test_train_cov @ cho_solve((chol, True), test_train_cov.T)
+                assert cov.ndim == 2
+
+                return numpyro.distributions.MultivariateNormal(mean, cov)
+            else:
+                raise NotImplementedError
+
+                # return numpyro.Independent()
+
+
+            #new_cov_row = self.cov_vec_set(x, xs)
+            #ys_cent = self._ys_centered(xs, ys).flatten()
+            # cho_sol = cho_solve((chol, True), ys_cent)
+            # mean = self.mean_module(x) + jnp.dot(new_cov_row.flatten(), cho_sol)
+            # var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
+            # std = jnp.sqrt(var)
+            # return numpyro.distributions.Normal(loc=mean, scale=jnp.ones((1,))*std)
+
         else:
-            return no_data((x, xs, chol))
+            return self.prior(xs_test)
+
+
+
 
     def pred_dist(self, xs_test):
         """prediction with noise"""
         predictive_dist_noiseless = self.posterior(xs_test)
         return self.likelihood(predictive_dist_noiseless)
 
-    @functools.partial(hk.vmap, in_axes=(None, 0))
-    def prior(self, x):
-        return self._prior(x)
 
-    def _prior(self, x):
-        mean = self.mean_module(x)
-        stddev = jnp.sqrt(self.cov_vec_vec(x, x)) # I am slightly surprised by this result
-        return numpyro.distributions.Normal(loc=mean, scale=stddev)
+    def prior(self, xs, return_full_covariance=True):
+        mean = self.mean_module(xs)
+        cov = self.cov_set_set(xs, xs)
+        if return_full_covariance:
+            return MultivariateNormal(mean, cov)
+        else:
+            return get_diagonal_gaussian(mean, jnp.diag(cov))
+
 
     def add_data_and_refit(self, xs, ys):
         old_xs = hk.get_state("xs")
@@ -108,9 +126,9 @@ class JAXExactGP:
         data_cov_w_noise = self._data_cov_with_noise(xs)  # more noise
         cholesky = cho_factor(data_cov_w_noise)
         hk.set_state("cholesky", cholesky[0])
+        hk.set_state("xs", xs)
+        hk.set_state("ys", ys)
         alpha = cho_solve(cholesky, ys_centered)
-        f1 = ys_centered.flatten()
-        f2 = alpha.flatten()
         ll = -0.5 * jnp.dot(ys_centered.flatten(), alpha.flatten())
         ll -= jnp.sum(jnp.diag(cholesky[0]))  # this should be faster than trace
         ll -= xs.shape[0] / 2.0 * jnp.log(2.0 * jnp.pi)

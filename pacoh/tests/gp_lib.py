@@ -2,8 +2,11 @@ import unittest
 
 import haiku as hk
 import numpy as np
+import numpyro
+from numpyro.distributions import Independent, MultivariateNormal, Normal
 from jax import numpy as jnp
 
+from pacoh.modules.distributions import multivariate_kl
 from pacoh.modules.means import JAXConstantMean, JAXZeroMean
 
 
@@ -44,6 +47,35 @@ class TestMeanAndKernels(unittest.TestCase):
     def test_kernel_interfaces(self):
         pass
 
+
+class TestAuxiliaryStuff(unittest.TestCase):
+    def test_diagonalcase(self):
+        loc1 = jnp.zeros((3,))
+        loc2 = 0.1 + jnp.zeros((3,))
+        dcov1 = 1.1 * jnp.ones((3,))
+        dcov2 = 0.9 * jnp.ones((3,))
+
+        # diagonal gaussian
+        dist1 = numpyro.distributions.Normal(loc=loc1, scale=dcov1)
+        dist2 = numpyro.distributions.Normal(loc=loc2, scale=dcov2)
+        dist1 = numpyro.distributions.Independent(dist1, 1)
+        dist2 = numpyro.distributions.Independent(dist2, 1)
+        diagonalcase = numpyro.distributions.kl_divergence(dist1, dist2)
+
+        # full gaussian
+        cov1 = jnp.diag(dcov1)
+        cov2 = jnp.diag(dcov2)
+        fdist1 = MultivariateNormal(loc1, cov1)
+        fdist2 = MultivariateNormal(loc2, cov2)
+        mykl = multivariate_kl(fdist1, fdist2)
+
+        print(diagonalcase)
+        print(mykl)
+
+        self.assertAlmostEquals(diagonalcase, mykl)
+
+    def compare_to_pytorch(self):
+        pass
 
 
 if __name__ == '__main__':

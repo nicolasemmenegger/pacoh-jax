@@ -51,7 +51,6 @@ class AcquisitionAlgorithm:
         return self_dict
 
 class UCB(AcquisitionAlgorithm):
-
     def __init__(self, model, domain, beta=2.0, **kwargs):
         super().__init__(model, domain, **kwargs)
         self.beta = beta
