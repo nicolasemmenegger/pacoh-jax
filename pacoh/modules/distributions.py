@@ -106,6 +106,8 @@ def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> flo
     bilin = locdiff @ cho_solve(d2chol, locdiff)
 
     kl = logdets - dist1.loc.shape[0] + trace + bilin
+    if jnp.isnan(kl):
+        pass # just for setting bpoint
     return 0.5*kl
 
 

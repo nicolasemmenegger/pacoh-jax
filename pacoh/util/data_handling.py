@@ -126,7 +126,7 @@ def normalize_predict(predict_fn: RawPredFunc):
             warnings.warn("You want the full covariance but only asked for mean and std of individual points... return_density ignored")
             warnings.warn("There is probably a smarter thing to do here")
 
-        new_loc = pred_dist.loc + self._normalizer.y_mean
+        new_loc = self._normalizer.y_std * pred_dist.loc + self._normalizer.y_mean
         if isinstance(pred_dist, Independent):
             new_scale = jnp.sqrt(pred_dist.variance) * self._normalizer.y_std
             transformed = Normal(new_loc, new_scale)

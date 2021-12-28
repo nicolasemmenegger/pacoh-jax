@@ -15,13 +15,14 @@ from numpyro.distributions import Uniform, MultivariateNormal, Independent
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
-from pacoh.modules.belief import GaussianBeliefState
+from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
 from pacoh.modules.domain import ContinuousDomain, DiscreteDomain
+from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
-from pacoh.modules.means import JAXMean
-from pacoh.modules.kernels import JAXKernel
-from pacoh.modules.distributions import multivariate_kl
-from pacoh.util.initialization import initialize_model_with_state, initialize_optimizer
+from pacoh.modules.means import JAXMean, JAXZeroMean
+from pacoh.modules.kernels import JAXKernel, JAXRBFKernel
+from pacoh.modules.distributions import multivariate_kl, JAXGaussianLikelihood
+from pacoh.util.initialization import initialize_model_with_state, initialize_optimizer, initialize_model
 
 
 class F_PACOH_MAP_GP(RegressionModelMetaLearned):
@@ -40,12 +41,12 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                  num_tasks: int = None,
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
-                 prior_weight=1e-3,
+                 prior_weight=0.1,  # kappa
                  train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
                  num_samples_kl=20,
-                 prior_lengthscale=0.2,
-                 prior_outputscale=2.0,
-                 prior_kernel_noise=1e-3,
+                 hyperprior_lengthscale=1.0,
+                 hyperprior_outputscale=2.0,
+                 hyperprior_noise_std=1.0, # this has numerical stability implications
                  normalize_data: bool = True,
                  normalizer: DataNormalizer = None,
                  random_state: jax.random.PRNGKey = None):
@@ -66,13 +67,24 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self.particle, empty_state = initialize_model_with_state(init_fn, init_key, (task_batch_size, input_dim))
         self.state = self.empty_state = empty_state
 
-        def mean_std_map(*_):
-            return 0.0, 1.0
+        # construct the hyperprior in function space
+        def hyperprior_impure(xs):
+            hyperprior_mean = JAXZeroMean(output_dim)
+            hyperprior_covar = JAXRBFKernel(input_dim, hyperprior_lengthscale, hyperprior_outputscale)
+            hyperprior_likelihood = JAXGaussianLikelihood(output_dim=output_dim,
+                                                          variance=hyperprior_noise_std**2,
+                                                          learn_likelihood=False)
 
-        self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, self.particle)
+            # the hyperprior is a dirac distribution over exactly one GP
+            gp_hyperprior_particle = JAXExactGP(hyperprior_mean, hyperprior_covar, hyperprior_likelihood)
+            return gp_hyperprior_particle.prior(xs, return_full_covariance=True)
+
+        hyper_init, hyper_apply = hk.transform(hyperprior_impure)
+        hyper_params = initialize_model(hyper_init, None, (1, input_dim))
+        self.hyperprior_marginal = functools.partial(hyper_apply, hyper_params, None)
 
         self._rng, sample_key = jax.random.split(self._rng)
-        # self.particle = pytree_unstack(GaussianBelief.rsample(self.hyperprior, sample_key, 1))[0]
+        warnings.warn("Not sure yet how initialization should be done")
 
 
         def target_post_prob(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
@@ -84,9 +96,14 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             for xs, ys, k in zip(meta_xs_batch, meta_ys_batch, keys):
                 # marginal ll
                 mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
-                kl = self._functional_kl(particle, None, k, xs, ys)
+                kl = self._functional_kl(particle, k, xs)
+                if jnp.isnan(kl):
+                    print("hello")
+                    kl = self._functional_kl(particle, k, xs)
                 n = num_tasks
                 m = xs.shape[0]
+
+                # this is formula (3) from pacoh, and prior_weight corresponds to kappa
                 loss += - mll / (task_batch_size * m) + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
 
             return loss
@@ -110,13 +127,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch)
         updates, self.optimizer_state = self.optimizer.update(grad, self.optimizer_state, self.particle)
         self.particle = optax.apply_updates(self.particle, updates)
-        # if jnp.isnan(loss):
-        #     print(loss)
-        #     keys = jax.random.split(key, 5)
-        #     for i in range(5):
-        #         print(self._sample_measurement_set(keys[i], xs_batch))
-        #         # self._apply_fns.base_learner_predict(self.particle, )
-        #     sys.exit(1)
         return loss
 
     @normalize_predict
@@ -140,12 +150,12 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             # idx_rand = np.random.choice(xs_train.shape[0], n_train_x)
             # xs_kl = torch.cat([xs_train[idx_rand], self.domain_dist.sample((n_rand_x,))], dim=0)
         else:
-            xs_kl = self.domain_dist.sample(k, (self.num_samples_kl,))
+            xs_kl = self.domain_dist.sample(k, (self.num_samples_kl,)) / self._normalizer.x_std[None, :]
 
         assert xs_kl.shape == (self.num_samples_kl, self.input_dim)
         return xs_kl
 
-    def _functional_kl(self, particle, state, k, xs, ys):
+    def _functional_kl(self, particle, k, xs):
         """
         Computes the approximation of the functional kl divergence by subsampling
         :param particle: The parameters of the hyperposterior/prior
@@ -158,42 +168,18 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         # sample / construct measurement set
         xs_kl = self._sample_measurement_set(k, xs)
 
-        # functional KL
-        # TODO check that this is really not needed anymore, if no, can get rid of ys argument
-        _, fitted_state = self._apply_fns.base_learner_fit(particle, self.empty_state, None, xs, ys)
-        pred_posterior, _ = self._apply_fns.base_learner_predict(particle, fitted_state, None, xs_kl)
-        pred_prior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
+        hyperposterior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
+        hyperprior = self.hyperprior_marginal(xs_kl)
 
-        if isinstance(pred_prior, MultivariateNormal):
-            assert isinstance(pred_posterior, MultivariateNormal), "both prior and posterior should have same shape"
-            return multivariate_kl(pred_posterior, pred_prior)
-        else:
-            assert isinstance(pred_posterior, Independent) and isinstance(pred_prior, Independent)
-            return numpyro.distributions.kl_divergence(pred_posterior, pred_prior)
-
-
-
-        # K_prior = torch.reshape(self.prior_covar_module(x_kl).evaluate(), (x_kl.shape[0], x_kl.shape[0]))
-        #
-        # inject_noise_std = self.prior_kernel_noise
-        # error_counter = 0
-        # while error_counter < 5:
-        #     try:
-        #         dist_f_prior = MultivariateNormal(torch.zeros(x_kl.shape[0]), K_prior + inject_noise_std * torch.eye(x_kl.shape[0]))
-        #         return kl_divergence(dist_f_posterior, dist_f_prior)
-        #     except RuntimeError as e:
-        #         import warnings
-        #         inject_noise_std = 2 * inject_noise_std
-        #         error_counter += 1
-        #         warnings.warn('encoundered numerical error in computation of KL: %s '
-        #                       '--- Doubling inject_noise_std to %.4f and trying again' % (str(e), inject_noise_std))
-        # raise RuntimeError('Not able to compute KL')
+        assert isinstance(hyperposterior, MultivariateNormal), "both hyperprior and hyperposterior should have same shape"
+        kl = multivariate_kl(hyperposterior, hyperprior)
+        return kl
 
 
 if __name__ == "__main__":
     from jax.config import config
     config.update("jax_debug_nans", False)
-    config.update('jax_disable_jit', False)
+    config.update('jax_disable_jit', True)
 
     from experiments.data_sim import SinusoidDataset
 
@@ -222,20 +208,20 @@ if __name__ == "__main__":
     for weight_decay in [0.5]:
         pacoh_map = F_PACOH_MAP_GP(1, 1, ContinuousDomain(jnp.ones((1,))*-6, jnp.ones((1,))*6), learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
                                  num_tasks=num_train_tasks,
-                                covar_module='NN', mean_module='zero', mean_nn_layers=NN_LAYERS, feature_dim=2,
+                                covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
                                 kernel_nn_layers=NN_LAYERS)
 
         itrs = 0
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(40):
-            n_iter = 500
+            n_iter = 3
             pacoh_map.meta_fit(meta_train_data, meta_test_data, log_period=1000, num_iter_fit=n_iter)
 
             itrs += n_iter
 
             x_plot = np.linspace(-5, 5, num=150)
-            x_context, y_context, x_test, y_test = meta_test_data[0]
+            x_context, y_context, x_test, y_test = meta_test_data[1]
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
             pacoh_map._clear_data()
             pacoh_map.predict(x_plot, False)
@@ -243,7 +229,7 @@ if __name__ == "__main__":
 
             plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
-            plt.plot(x_plot, pred_mean)    # the curve we fitted based on the target test points
+            plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
 
             lcb, ucb = pacoh_map.confidence_intervals(x_plot)
             plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")

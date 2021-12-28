@@ -102,7 +102,6 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         if pred_dist is None:
             pred_dist = self.predict(test_xs)
 
-        test = pred_dist.log_prob(test_ys) # this should just be a scalar no
         avg_log_likelihood = pred_dist.log_prob(test_ys) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
         calibr_error = calib_error(diagonalize_gaussian(pred_dist), test_ys)
