@@ -40,7 +40,7 @@ class JAXExactGP:
         return self.likelihood(self.prior(dummy_xs))
 
     def _ys_centered(self, xs, ys):
-        return ys - self.mean_module(xs)
+        return ys - self.mean_module(xs).flatten()
 
     def _data_cov_with_noise(self, xs):
         data_cov = self.cov_set_set(xs, xs)
@@ -53,7 +53,6 @@ class JAXExactGP:
         data_cov_w_noise = self._data_cov_with_noise(xs)
         hk.set_state("cholesky", cho_factor(data_cov_w_noise, lower=True)[0])
 
-    # @functools.partial(hk.vmap, in_axes=(None, 0))
     def posterior(self, xs_test: jnp.ndarray, return_full_covariance=True):
         xs = hk.get_state("xs", dtype=jnp.float32)
         ys = hk.get_state("ys", dtype=jnp.float32)
@@ -80,7 +79,6 @@ class JAXExactGP:
 
                 # return numpyro.Independent()
 
-
             #new_cov_row = self.cov_vec_set(x, xs)
             #ys_cent = self._ys_centered(xs, ys).flatten()
             # cho_sol = cho_solve((chol, True), ys_cent)
@@ -105,7 +103,7 @@ class JAXExactGP:
         mean = self.mean_module(xs)
         cov = self.cov_set_set(xs, xs)
         if return_full_covariance:
-            return MultivariateNormal(mean, cov)
+            return MultivariateNormal(mean.flatten(), cov)
         else:
             return get_diagonal_gaussian(mean, jnp.diag(cov))
 

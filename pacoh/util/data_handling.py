@@ -6,15 +6,16 @@ import numpy as np
 from typing import Optional
 import jax
 from jax import numpy as jnp
+from numpyro.distributions import Independent, MultivariateNormal, Normal
 from torch.utils import data as torch_data
 from torch.utils.data.sampler import Sampler
 
-from pacoh.modules.distributions import AffineTransformedDistribution
+from pacoh.modules.distributions import AffineTransformedDistribution, get_diagonal_gaussian
 from pacoh.util.typing import RawPredFunc, NormalizedPredFunc
 
 
 class DataNormalizer:
-    def __init__(self, input_dim, output_dim, normalize_data=True):
+    def __init__(self, input_dim, output_dim, normalize_data=True, flatten_ys=False):
         self.x_mean = jnp.zeros((input_dim,))
         self.x_std = jnp.ones((input_dim,))
 
@@ -24,29 +25,32 @@ class DataNormalizer:
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.turn_off_normalization = not normalize_data
+        self.flatten_ys = flatten_ys
 
     @classmethod
-    def from_meta_tuples(cls, meta_train_tuples, normalize_data=True):
+    def from_meta_tuples(cls, meta_train_tuples, normalize_data=True, flatten_ys=False):
         xs_stack, ys_stack = map(list,
-                                 zip(*[handle_batch_input_dimensionality(x_train, y_train) for x_train, y_train in
+                                 zip(*[handle_batch_input_dimensionality(x_train, y_train, flatten_ys=flatten_ys) for x_train, y_train in
                                        meta_train_tuples]))
         all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
-        return cls.from_dataset(all_xs, all_ys, normalize_data)
+        return cls.from_dataset(all_xs, all_ys, normalize_data, flatten_ys)
 
     @classmethod
-    def from_dataset(cls, xs, ys, normalize_data=True):
+    def from_dataset(cls, xs, ys, normalize_data=True, flatten_ys=False):
         """
         Computes mean and std of the dataset and sets the statistics
         """
-        xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
-        assert xs.ndim == ys.ndim == 2, "Something seems off with your data"
+        xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=flatten_ys)
+        assert not flatten_ys or (flatten_ys and xs.ndim == 2 and ys.ndim == 1), "Something seems off with your data"
+        assert flatten_ys or (not flatten_ys and xs.ndim == 2 and ys.ndim == 2), "Something seems off with your data"
+
         input_dim = xs.shape[-1]
         output_dim = ys.shape[-1]
 
         normalizer = cls(input_dim, output_dim, normalize_data)
         normalizer.x_mean, normalizer.y_mean = jnp.mean(xs, axis=0), jnp.mean(ys, axis=0)
         normalizer.x_std, normalizer.y_std = jnp.std(xs, axis=0) + 1e-8, jnp.std(ys, axis=0) + 1e-8
-
+        normalizer.flatten_ys = flatten_ys
         return normalizer
 
     def normalize_data(self, xs, ys=None):
@@ -65,24 +69,29 @@ class DataNormalizer:
             else:
                 return xs, ys
 
-        xs_normalized = (xs - self.x_mean[0]) / self.x_std[0]
+        xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :] # check whether this is correct
         if ys is None:
             return xs_normalized
         else:
-            ys_normalized = (ys - self.y_mean[0]) / self.y_std[0]
+            if not self.flatten_ys:
+                ys_normalized = (ys - self.y_mean[0]) / self.y_std[0]
+            else:
+                ys_normalized = (ys - self.y_mean) / self.y_std
             return xs_normalized, ys_normalized
 
     def handle_data(self, xs, ys=None):
         if ys is not None:
-            xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
+            xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=self.flatten_ys)
             return self.normalize_data(xs, ys)
         else:
-            xs = handle_batch_input_dimensionality(xs)
+            xs = handle_batch_input_dimensionality(xs, flatten_ys=self.flatten_ys)
             return self.normalize_data(xs)
 
     def handle_meta_tuples(self, meta_tuples):
         warnings.warn("something is really weird here: fix later")
-        alt = [((xs+0.17)/2.76, (ys-4.92)/1.6) for xs, ys in meta_tuples]
+        # TODO this needs to change here
+        alt = [handle_batch_input_dimensionality(xs, ys, flatten_ys=self.flatten_ys) for xs, ys in meta_tuples]
+        alt = [((xs+0.17)/2.76, (ys-4.92)/1.6) for xs, ys in alt]
         ret = [self.handle_data(xs, ys) for xs, ys in meta_tuples]
         return alt
 
@@ -102,7 +111,7 @@ def normalize_predict(predict_fn: RawPredFunc):
     # 
     # return f
 
-    def normalized_predict(self, test_x, return_density=True):
+    def normalized_predict(self, test_x, return_density=True, return_full_covariance=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
 
@@ -113,14 +122,50 @@ def normalize_predict(predict_fn: RawPredFunc):
             mean = jnp.zeros_like(self._normalizer.y_mean)
             std = jnp.ones_like(self._normalizer.y_std)
 
-        pred_dist_transformed = AffineTransformedDistribution(pred_dist,
-                                                              normalization_mean=mean,
-                                                              normalization_std=std)
+        if return_full_covariance and not return_density:
+            warnings.warn("You want the full covariance but only asked for mean and std of individual points... return_density ignored")
+            warnings.warn("There is probably a smarter thing to do here")
 
-        if return_density:
-            return pred_dist_transformed.iid_normal
+        new_loc = pred_dist.loc + self._normalizer.y_mean
+        if isinstance(pred_dist, Independent):
+            new_scale = jnp.sqrt(pred_dist.variance) * self._normalizer.y_std
+            transformed = Normal(new_loc, new_scale)
+
+            assert transformed.variance.shape == pred_dist.variance.shape
+            assert transformed.mean.shape == pred_dist.mean.shape
+
+            if return_full_covariance:
+                raise ValueError(
+                    "Cannot return full covariance if the base learner does not return full covariance. Please debug")
+
+            if return_density:
+                return transformed
+            else:
+                return new_loc, new_scale
+
+
+        elif isinstance(pred_dist, MultivariateNormal):
+            assert self.flatten_ys, "Multivariate normals with multidimensional outputs are not supported (yet?)"
+            new_cov = pred_dist.covariance_matrix * self._normalizer.y_std ** 2
+            transformed = MultivariateNormal(loc=new_loc, covariance_matrix=new_cov)
+
+            if return_full_covariance:
+                return transformed
+
+            diag_std = jnp.sqrt(jnp.diag(new_cov))
+            if return_density:
+                return get_diagonal_gaussian(new_loc, diag_std)
+            else:
+                return new_loc, diag_std
         else:
-            return pred_dist_transformed.mean, pred_dist_transformed.stddev
+            raise NotImplementedError("This posterior distribution is not supported: " + str(pred_dist.__class__))
+
+
+
+        # if return_density:
+        #     return pred_dist_transformed.iid_normal
+        # else:
+        #     return pred_dist_transformed.mean, pred_dist_transformed.stddev
 
     return normalized_predict
 
@@ -235,25 +280,27 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
 
         super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=unzip_collate)
 
-def handle_point_input_dimensionality(self, x, y):
-    if x.ndim == 1:
-        assert x.shape[-1] == self._input_dim
-        x = x.reshape((-1, self._input_dim))
-
-    if isinstance(y, float) or y.ndim == 0:
-        y = np.array(y)
-        y = y.reshape((1,))
-    elif y.ndim == 1:
-        pass
-    else:
-        raise AssertionError('y must not have more than 1 dim')
-    return x, y
+# def handle_point_input_dimensionality(self, x, y, flatten_ys: bool = False):
+#     
+#     if x.ndim == 1:
+#         x = x.reshape((-1, self._input_dim))
+# 
+#     if isinstance(y, float) or y.ndim == 0:
+#         y = np.array(y)
+#         y = y.reshape((1,))
+#     elif y.ndim == 1:
+#         if flatten_ys:
+#             y = y[0]
+#         pass
+#     else:
+#         raise AssertionError('y must not have more than 1 dim')
+#     return x, y
 
 
 def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = False):
     """
     Takes a dataset S=(xs,ys) and returns it in a uniform fashion. x shall have shape (num_points, input_dim) and
-    y shall have size (num_points), that is, we only consider scalar regression targets.
+    y shall have size (num_points,) or (num_points, 1)
     Args:
         xs: The inputs
         ys: The labels (optional)

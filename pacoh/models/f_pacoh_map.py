@@ -15,7 +15,7 @@ from numpyro.distributions import Uniform, MultivariateNormal, Independent
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
-from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
+from pacoh.modules.belief import GaussianBeliefState
 from pacoh.modules.domain import ContinuousDomain, DiscreteDomain
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean
@@ -41,7 +41,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
                  prior_weight=1e-3,
-                 train_data_in_kl=False, # whether to reuse the training set to evaluate the kl at
+                 train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
                  num_samples_kl=20,
                  prior_lengthscale=0.2,
                  prior_outputscale=2.0,
@@ -49,7 +49,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                  normalize_data: bool = True,
                  normalizer: DataNormalizer = None,
                  random_state: jax.random.PRNGKey = None):
-        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state, task_batch_size, num_tasks)
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state, task_batch_size, num_tasks, flatten_ys=True)
 
         assert isinstance(domain, ContinuousDomain) or isinstance(domain, DiscreteDomain)
         assert domain.d == input_dim, "Domain and input dimension don't match"
@@ -110,15 +110,14 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch)
         updates, self.optimizer_state = self.optimizer.update(grad, self.optimizer_state, self.particle)
         self.particle = optax.apply_updates(self.particle, updates)
-        if jnp.isnan(loss):
-            print(loss)
-            keys = jax.random.split(key, 5)
-            for i in range(5):
-                print(self._sample_measurement_set(keys[i], xs_batch))
-                # self._apply_fns.base_learner_predict(self.particle, )
-            sys.exit(1)
+        # if jnp.isnan(loss):
+        #     print(loss)
+        #     keys = jax.random.split(key, 5)
+        #     for i in range(5):
+        #         print(self._sample_measurement_set(keys[i], xs_batch))
+        #         # self._apply_fns.base_learner_predict(self.particle, )
+        #     sys.exit(1)
         return loss
-
 
     @normalize_predict
     def predict(self, xs):
@@ -165,12 +164,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         pred_posterior, _ = self._apply_fns.base_learner_predict(particle, fitted_state, None, xs_kl)
         pred_prior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
 
-        warnings.warn("I should implement an option to return the full posterior")
-
-
-        # multivar_posterior = distributions.Independent(pred_posterior, len(pred_posterior.batch_shape))
-        # multivar_prior = distributions.Independent(pred_posterior, len(pred_prior.batch_shape))
-
         if isinstance(pred_prior, MultivariateNormal):
             assert isinstance(pred_posterior, MultivariateNormal), "both prior and posterior should have same shape"
             return multivariate_kl(pred_posterior, pred_prior)
@@ -198,15 +191,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
 
 if __name__ == "__main__":
-
-    dist1 = numpyro.distributions.Normal(loc=jnp.zeros((3,)), scale=1.1*jnp.ones((3,)))
-    dist2 = numpyro.distributions.Normal(loc=0.1+jnp.zeros((3,)), scale=0.9*jnp.ones((3,)))
-
-    dist1 = numpyro.distributions.Independent(dist1, 0)
-    dist2 = numpyro.distributions.Independent(dist2, 0)
-
-    print(numpyro.distributions.kl_divergence(dist1, dist2))
-
     from jax.config import config
     config.update("jax_debug_nans", False)
     config.update('jax_disable_jit', False)

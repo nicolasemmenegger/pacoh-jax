@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 
 from tqdm import trange
 
+from pacoh.modules.distributions import diagonalize_gaussian
 from pacoh.util.data_handling import handle_batch_input_dimensionality, Sampler, DataNormalizer
 from pacoh.util.evaluation import calib_error, calib_error_chi2
 from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
@@ -15,7 +16,7 @@ from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractat
 
 class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalizer: DataNormalizer = None, random_state: jax.random.PRNGKey = None):
+                 normalizer: DataNormalizer = None, flatten_ys: bool = False, random_state: jax.random.PRNGKey = None):
         """
         Abstracts the boilerplate functionality of a Regression Model. This includes data normalization,
         fitting and inference
@@ -36,14 +37,17 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         """
         self._input_dim = input_dim
         self._output_dim = output_dim
+        self.flatten_ys = flatten_ys
+        assert not flatten_ys or output_dim == 1, "implication flatten_ys => output_dim == 1 does not hold"
         self._clear_data()
 
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
         self._normalizer = None
         if normalizer is None:
-            self._normalizer = DataNormalizer(input_dim, output_dim, normalize_data)
+            self._normalizer = DataNormalizer(input_dim, output_dim, normalize_data, flatten_ys=flatten_ys)
         else:
             self._normalizer = normalizer
+            assert normalizer.flatten_ys == flatten_ys, "instructions unclear, flatten_ys"
             assert normalizer.turn_off_normalization == (not normalize_data), "instructions unclear, normalize"
             assert output_dim == normalizer.output_dim and input_dim == normalizer.input_dim, """Dimensions not matching"""
 
@@ -55,9 +59,9 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
             ys: the corresponding observations, of shape (num_data) or (num_data, 1)
             refit: whether to refit the posterior or not
         """
-        xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
-        assert xs.ndim == 2 and xs.shape[1] == self._input_dim, "Something is wrong with your data"
-        assert ys.ndim == 2 and ys.shape[1] == self._output_dim, "Something is wrong with your data"
+        # xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
+        # assert xs.ndim == 2 and xs.shape[1] == self._input_dim, "Something is wrong with your data"
+        # assert ys.ndim == 2 and ys.shape[1] == self._output_dim, "Something is wrong with your data"
         # handle input dimensionality and normalize data
         xs, ys = self._normalizer.handle_data(xs, ys)
 
@@ -83,7 +87,6 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         xs, ys = handle_batch_input_dimensionality(xs, ys)
         self.add_data_points(xs, ys, refit)
 
-
     def eval(self, test_xs: jnp.array, test_ys: jnp.array, pred_dist=None) -> Dict[str, float]:
         """
         Computes the average test log likelihood and the rmse on test data
@@ -95,13 +98,15 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         Returns: (avg_log_likelihood, rmse)
 
         """
-        test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys)
+        test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys, flatten_ys=self.flatten_ys)
         if pred_dist is None:
             pred_dist = self.predict(test_xs)
-        avg_log_likelihood = jnp.sum(pred_dist.log_prob(test_ys)) / test_ys.shape[0]
+
+        test = pred_dist.log_prob(test_ys) # this should just be a scalar no
+        avg_log_likelihood = pred_dist.log_prob(test_ys) / test_ys.shape[0]
         rmse = jnp.sqrt(jnp.mean(jax.lax.square(pred_dist.mean - test_ys)))
-        calibr_error = calib_error(pred_dist, test_ys)
-        calibr_error_chi2 = calib_error_chi2(pred_dist, test_ys)
+        calibr_error = calib_error(diagonalize_gaussian(pred_dist), test_ys)
+        calibr_error_chi2 = calib_error_chi2(diagonalize_gaussian(pred_dist), test_ys)
         return {
             'avg. ll': avg_log_likelihood.item(),
             'rmse': rmse.item(),
@@ -110,10 +115,10 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         }
 
     def confidence_intervals(self, test_x, confidence=0.9):
-        pred_dist = self.predict(test_x)
+        pred_dist = self.predict(test_x, return_density=True, return_full_covariance=False)
         alpha = (1 - confidence) / 2
-        ucb = pred_dist.icdf((1 - alpha)*jnp.ones(pred_dist.batch_shape))
-        lcb = pred_dist.icdf(alpha*jnp.ones(pred_dist.batch_shape))
+        ucb = pred_dist.base_dist.icdf((1 - alpha)*jnp.ones(pred_dist.event_shape))
+        lcb = pred_dist.base_dist.icdf(alpha*jnp.ones(pred_dist.event_shape))
         return lcb, ucb
 
     @abstractmethod
@@ -193,7 +198,10 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
             called both at initialisation, and when clearing the stored observations
         """
         self._xs_data = jnp.zeros((0, self._input_dim), dtype=np.double)
-        self._ys_data = jnp.zeros((0, self._output_dim), dtype=np.double)
+        if self.flatten_ys:
+            self._ys_data = jnp.zeros((0,), dtype=np.double)
+        else:
+            self._ys_data = jnp.zeros((0, self._output_dim), dtype=np.double)
         self._num_train_points = 0
 
     def _get_batch_sampler(self, xs, ys, batch_size, shuffle=True):

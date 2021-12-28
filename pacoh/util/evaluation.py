@@ -1,11 +1,16 @@
 import numpy as np
 import scipy.stats
+from numpyro.distributions import Independent, Normal
 
 
-def calib_error(pred_dist_vectorized, test_ys):
+def calib_error(pred_dist_diagonalized, test_ys):
     """ Both inputs should be 2 dimensional. """
-    cdf_vals = pred_dist_vectorized.cdf(test_ys)
-    assert cdf_vals.shape[-1] == 1 and cdf_vals.ndim == 2
+    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(pred_dist_diagonalized.base_dist, Normal):
+        raise ValueError("Wrong argument type")
+
+    cdf_vals = pred_dist_diagonalized.base_dist.cdf(test_ys)
+    if not (cdf_vals.shape[-1] == 1 and cdf_vals.ndim == 2):
+        cdf_vals = np.expand_dims(cdf_vals, axis=1)
     num_points = test_ys.shape[0]
     conf_levels = np.linspace(0.05, 1.0, 20)
     conf_levels = np.expand_dims(conf_levels, axis=0)
@@ -20,8 +25,11 @@ def calib_error(pred_dist_vectorized, test_ys):
     return calib_rmse
 
 
-def calib_error_chi2(pred_dist_vectorized, test_ys):
-    z2 = (((pred_dist_vectorized.mean - test_ys) / pred_dist_vectorized.scale) ** 2)
+def calib_error_chi2(pred_dist_diagonalized, test_ys):
+    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(pred_dist_diagonalized.base_dist, Normal):
+        raise ValueError("Wrong argument type")
+
+    z2 = (((pred_dist_diagonalized.base_dist.mean - test_ys) / pred_dist_diagonalized.base_dist.scale) ** 2)
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
     conf_levels = np.linspace(0.05, 1, 20)
     accs = np.array([f(p) for p in conf_levels])

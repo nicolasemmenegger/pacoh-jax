@@ -34,9 +34,9 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
     """
     def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
                  normalizer: DataNormalizer = None, random_state: Optional[jax.random.PRNGKey] = None,
-                 task_batch_size: int = -1, num_tasks: int = None, num_iter_meta_fit: int = -1, minibatch_at_dataset_level: bool = False,
+                 task_batch_size: int = -1, num_tasks: int = None, flatten_ys=False, num_iter_meta_fit: int = -1, minibatch_at_dataset_level: bool = False,
                  dataset_batch_size: Optional[int] = None):
-        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, flatten_ys, random_state)
         if num_tasks is None:
             raise ValueError("Please specify the number of tasks you intend to train on at initialisation time")
 
@@ -51,7 +51,9 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         if normalizer is None:
             self._provided_normaliser = None
             self._normalizer = None  # make sure we only set the normalizer based on the meta-tuples
+        # the other branch is handled in the superclass
         self.fitted = False
+
 
     def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
         """
@@ -67,13 +69,12 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         """
         assert (meta_valid_tuples is None) or (all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples]))
         if self._provided_normaliser is None:
-            self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True)
+            self._normalizer = DataNormalizer.from_meta_tuples(meta_train_tuples, True, flatten_ys=self.flatten_ys)
             # print("x_std:", self._normalizer.x_std)
             # print("y_std:", self._normalizer.y_std)
             # print("x_mean:", self._normalizer.x_mean)
             # print("y_mean:", self._normalizer.y_mean)
-            self._provided_normaliser = self._normalizer
-
+            # self._provided_normaliser = self._normalizer # TODO figure out whether this is the correct control flow
 
         self._check_meta_data_shapes(meta_train_tuples)
         num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit

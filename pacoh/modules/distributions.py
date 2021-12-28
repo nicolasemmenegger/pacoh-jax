@@ -91,9 +91,11 @@ def get_mixture(pred_dists, n):
     mixture_weights = numpyro.distributions.Categorical(probs=jnp.ones((n,)) / n)
     return numpyro.distributions.MixtureSameFamily(mixture_weights, pred_dists)
 
+
 def get_diagonal_gaussian(loc, scale):
     assert loc.shape == scale.shape and loc.ndim <= 2
     return numpyro.distributions.Independent(numpyro.distributions.Normal(loc, scale), loc.ndim)
+
 
 def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> float:
     # TODO this could probably be sped up a bit by combining certain cholesky factorizations
@@ -105,3 +107,12 @@ def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> flo
 
     kl = logdets - dist1.loc.shape[0] + trace + bilin
     return 0.5*kl
+
+
+def diagonalize_gaussian(dist):
+    if isinstance(dist, Independent):
+        return dist
+    elif isinstance(dist, MultivariateNormal):
+        return get_diagonal_gaussian(dist.mean, jnp.sqrt(jnp.diag(dist.covariance_matrix)))
+    else:
+        raise ValueError("unknown argument type")
