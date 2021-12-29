@@ -39,7 +39,12 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         self._output_dim = output_dim
         self.flatten_ys = flatten_ys
         assert not flatten_ys or output_dim == 1, "implication flatten_ys => output_dim == 1 does not hold"
-        self._clear_data()
+        self._xs_data = jnp.zeros((0, self._input_dim), dtype=np.double)
+        if self.flatten_ys:
+            self._ys_data = jnp.zeros((0,), dtype=np.double)
+        else:
+            self._ys_data = jnp.zeros((0, self._output_dim), dtype=np.double)
+        self._num_train_points = 0
 
         self._rng = random_state if random_state is not None else jax.random.PRNGKey(42)
         self._normalizer = None
@@ -193,8 +198,6 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def _clear_data(self):
         """
         Initializes the stored data to be empty.
-        Notes:
-            called both at initialisation, and when clearing the stored observations
         """
         self._xs_data = jnp.zeros((0, self._input_dim), dtype=np.double)
         if self.flatten_ys:
@@ -202,6 +205,7 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         else:
             self._ys_data = jnp.zeros((0, self._output_dim), dtype=np.double)
         self._num_train_points = 0
+        self._recompute_posterior()
 
     def _get_batch_sampler(self, xs, ys, batch_size, shuffle=True):
         """

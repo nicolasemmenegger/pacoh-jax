@@ -1,7 +1,4 @@
 import functools
-import sys
-import time
-import warnings
 from typing import Callable, Collection, Union
 
 import haiku as hk
@@ -10,12 +7,10 @@ import numpy as np
 import optax
 import torch
 from jax import numpy as jnp
-import numpyro.distributions
 from numpyro.distributions import Uniform, MultivariateNormal, Independent
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
-from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
 from pacoh.modules.domain import ContinuousDomain, DiscreteDomain
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
@@ -41,10 +36,10 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                  num_tasks: int = None,
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
-                 prior_weight=0.05,  # kappa
+                 prior_weight=0.1,  # kappa
                  train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
                  num_samples_kl=20,
-                 hyperprior_lengthscale=0.5,
+                 hyperprior_lengthscale=0.3,
                  hyperprior_outputscale=2.0,
                  hyperprior_noise_var=1e-3,  # this has numerical stability implications
                  normalize_data: bool = True,
@@ -84,8 +79,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self.hyperprior_marginal = functools.partial(hyper_apply, hyper_params, None)
         self.hyperprior_noise_var = hyperprior_noise_var
         self._rng, sample_key = jax.random.split(self._rng)
-        warnings.warn("Not sure yet how initialization should be done")
-
 
         def target_post_prob(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
             """ Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
@@ -197,6 +190,10 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         return kl
 
 
+    def _clear_data(self):
+        super()._clear_data()
+
+
 if __name__ == "__main__":
     from jax.config import config
     config.update("jax_debug_nans", False)
@@ -243,17 +240,28 @@ if __name__ == "__main__":
 
             x_plot = np.linspace(-5, 5, num=150)
             x_context, y_context, x_test, y_test = meta_test_data[1]
-            pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
-            pacoh_map._clear_data()
-            prior_mean, prior_std = pacoh_map.predict(x_plot, return_density=False, return_full_covariance=False)
-            pred_mean = pred_dist.loc
 
+            # prior prediction
+            pacoh_map._clear_data()
+            prior_lcb, prior_ucb = pacoh_map.confidence_intervals(x_plot)
+            prior_mean, prior_std = pacoh_map.predict(x_plot, return_density=False, return_full_covariance=False)
+
+            # posterior prediction
+            pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
+            pred_mean = pred_dist.loc
+            lcb, ucb = pacoh_map.confidence_intervals(x_plot)
+
+            # plot data
             plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
-            plt.plot(x_plot, pred_mean, color="blue")  # the curve we fitted based on the target test points
-            plt.plot(x_plot, prior_mean, color="orange")
 
-            lcb, ucb = pacoh_map.confidence_intervals(x_plot)
-            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="blue")
+            # plot posterior
+            plt.plot(x_plot, pred_mean, color="blue")  # the curve we fitted based on the target test points
+            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.15, color="blue")
+
+            # plot prior
+            plt.plot(x_plot, prior_mean, color="orange")  # the curve we fitted based on the target test points
+            plt.fill_between(x_plot, prior_lcb.flatten(), prior_ucb.flatten(), alpha=0.15, color="orange")
+
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()
