@@ -111,7 +111,7 @@ def normalize_predict(predict_fn: RawPredFunc):
     # 
     # return f
 
-    def normalized_predict(self, test_x, return_density=True, return_full_covariance=True):
+    def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
 

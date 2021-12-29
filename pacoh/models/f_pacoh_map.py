@@ -41,12 +41,12 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                  num_tasks: int = None,
                  lr: float = 1e-3,
                  lr_decay: float = 1.0,
-                 prior_weight=0.1,  # kappa
+                 prior_weight=0.05,  # kappa
                  train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
                  num_samples_kl=20,
-                 hyperprior_lengthscale=1.0,
+                 hyperprior_lengthscale=0.5,
                  hyperprior_outputscale=2.0,
-                 hyperprior_noise_std=1.0, # this has numerical stability implications
+                 hyperprior_noise_var=1e-3,  # this has numerical stability implications
                  normalize_data: bool = True,
                  normalizer: DataNormalizer = None,
                  random_state: jax.random.PRNGKey = None):
@@ -61,7 +61,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         """-------- Setup haiku differentiable functions and parameters -------"""
         pacoh_map_closure = construct_gp_base_learner(input_dim, output_dim, mean_module, covar_module,
                                                       learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers,
-                                                      learn_likelihood=True, initial_noise_std=0.05)
+                                                      learn_likelihood=True, initial_noise_std=1.0)
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
         self.particle, empty_state = initialize_model_with_state(init_fn, init_key, (task_batch_size, input_dim))
@@ -72,7 +72,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             hyperprior_mean = JAXZeroMean(output_dim)
             hyperprior_covar = JAXRBFKernel(input_dim, hyperprior_lengthscale, hyperprior_outputscale)
             hyperprior_likelihood = JAXGaussianLikelihood(output_dim=output_dim,
-                                                          variance=hyperprior_noise_std**2,
+                                                          variance=0.0,  # does not matter, only used for prior
                                                           learn_likelihood=False)
 
             # the hyperprior is a dirac distribution over exactly one GP
@@ -82,7 +82,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyper_init, hyper_apply = hk.transform(hyperprior_impure)
         hyper_params = initialize_model(hyper_init, None, (1, input_dim))
         self.hyperprior_marginal = functools.partial(hyper_apply, hyper_params, None)
-
+        self.hyperprior_noise_var = hyperprior_noise_var
         self._rng, sample_key = jax.random.split(self._rng)
         warnings.warn("Not sure yet how initialization should be done")
 
@@ -97,9 +97,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                 # marginal ll
                 mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
                 kl = self._functional_kl(particle, k, xs)
-                if jnp.isnan(kl):
-                    print("hello")
-                    kl = self._functional_kl(particle, k, xs)
+                # if jnp.isnan(kl):
+                #     print("hello")
+                #     kl = self._functional_kl(particle, k, xs)
                 n = num_tasks
                 m = xs.shape[0]
 
@@ -172,14 +172,35 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyperprior = self.hyperprior_marginal(xs_kl)
 
         assert isinstance(hyperposterior, MultivariateNormal), "both hyperprior and hyperposterior should have same shape"
-        kl = multivariate_kl(hyperposterior, hyperprior)
+
+        def compute_kl_with_noise(noise):
+            # computes the kl divergence between hyperprior and hyperposterior, by adding a little diagonal noise to the
+            # hyperprior
+            diagonal_noise = inject_noise_var * jnp.eye(self.num_samples_kl, self.num_samples_kl)
+            covar_with_noise = hyperprior.covariance_matrix + diagonal_noise
+            hyperprior_with_noise = MultivariateNormal(hyperprior.mean, covar_with_noise)
+            kl = multivariate_kl(hyperposterior, hyperprior_with_noise)
+            return kl
+
+        # this is both differentiable and jittable
+        # but admittedly quite ugly:
+        # https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#control-flow
+        # standard for loop is differentiable as condition does not depend on data
+        # this will simply be unrolled TODO think
+        kl = jnp.nan
+        inject_noise_var = self.hyperprior_noise_var
+        for _ in range(5):
+            # this
+            kl = jax.lax.cond(jnp.isnan(kl), lambda n: compute_kl_with_noise(n), lambda _: kl, inject_noise_var)
+            inject_noise_var *= 2
+
         return kl
 
 
 if __name__ == "__main__":
     from jax.config import config
     config.update("jax_debug_nans", False)
-    config.update('jax_disable_jit', True)
+    config.update('jax_disable_jit', False)
 
     from experiments.data_sim import SinusoidDataset
 
@@ -215,7 +236,7 @@ if __name__ == "__main__":
         print("---- weight-decay =  %.4f ----"%weight_decay)
 
         for i in range(40):
-            n_iter = 3
+            n_iter = 500
             pacoh_map.meta_fit(meta_train_data, meta_test_data, log_period=1000, num_iter_fit=n_iter)
 
             itrs += n_iter
@@ -224,14 +245,15 @@ if __name__ == "__main__":
             x_context, y_context, x_test, y_test = meta_test_data[1]
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
             pacoh_map._clear_data()
-            pacoh_map.predict(x_plot, False)
+            prior_mean, prior_std = pacoh_map.predict(x_plot, return_density=False, return_full_covariance=False)
             pred_mean = pred_dist.loc
 
             plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
-            plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
+            plt.plot(x_plot, pred_mean, color="blue")  # the curve we fitted based on the target test points
+            plt.plot(x_plot, prior_mean, color="orange")
 
             lcb, ucb = pacoh_map.confidence_intervals(x_plot)
-            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
+            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="blue")
             plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
             plt.show()

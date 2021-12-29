@@ -111,5 +111,10 @@ class TestAuxiliaryStuff(unittest.TestCase):
         return torch.from_numpy(np.array(arr))
 
 
+
+class TestExactGP(unittest.TestCase):
+    pass
+
+
 if __name__ == '__main__':
     unittest.main()
