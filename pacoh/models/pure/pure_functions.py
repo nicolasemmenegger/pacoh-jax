@@ -40,10 +40,10 @@ def get_pure_batched_likelihood_functions(likelihood_initial_std, learn_likeliho
     return factory
 
 
-def construct_vanilla_gp_forward_fns(input_dim, kernel_outputscale, kernel_lengthscale, likelihood_variance):
+def construct_vanilla_gp_forward_fns(input_dim, output_dim, kernel_outputscale, kernel_lengthscale, likelihood_variance):
     def factory():
         # Initialize the mean module with a zero-mean, and use an RBF kernel with *no* learned feature map
-        mean_module = JAXConstantMean(0.0)
+        mean_module = JAXZeroMean(output_dim=output_dim)
         covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale)
         likelihood = JAXGaussianLikelihood(likelihood_variance)
         gp = JAXExactGP(mean_module,

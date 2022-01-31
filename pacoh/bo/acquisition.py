@@ -3,11 +3,10 @@ from meta_bo.solver import FiniteDomainSolver, EvolutionarySolver
 
 import numpy as np
 
-class AcquisitionAlgorithm:
+class Acquisition:
     """
     Algorithm which is defined through an acquisition function.
     """
-
     def __init__(self, model, domain, x0=None, solver=None, random_state=None):
         super().__init__()
 
@@ -50,7 +49,7 @@ class AcquisitionAlgorithm:
         del self_dict['solver']
         return self_dict
 
-class UCB(AcquisitionAlgorithm):
+class UCB(Acquisition):
     def __init__(self, model, domain, beta=2.0, **kwargs):
         super().__init__(model, domain, **kwargs)
         self.beta = beta
@@ -61,7 +60,6 @@ class UCB(AcquisitionAlgorithm):
 
 
 class GooseUCB(UCB):
-
     def __init__(self, model_target, model_constr, domain, beta=2.0, **kwargs):
         super().__init__(model_target, domain, beta=2.0, **kwargs)
         self.beta = beta

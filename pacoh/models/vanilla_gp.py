@@ -41,8 +41,9 @@ class GPRegressionVanilla(RegressionModel):
             raise NotImplementedError("GPs currently only support univariate mode")
 
         super().__init__(input_dim=input_dim, output_dim=1, normalize_data=normalize_data,
-                         normalizer=normalizer, random_state=random_state)
+                         normalizer=normalizer, random_state=random_state, flatten_ys=True)
         factory = construct_vanilla_gp_forward_fns(input_dim,
+                                                   output_dim,
                                                    kernel_outputscale,
                                                    kernel_lengthscale,
                                                    likelihood_variance)
@@ -92,7 +93,6 @@ class GPRegressionVanilla(RegressionModel):
         return pred_dist
 
 
-
 if __name__ == "__main__":
     # Some testing code
     import torch
@@ -130,15 +130,14 @@ if __name__ == "__main__":
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 
-    pred_dist = gp.predict(x_plot)
+    pred_mean, pred_std = gp.predict(x_plot, return_density=False)
     lcb, ucb = gp.confidence_intervals(x_plot, confidence=0.9)
-    pred_mean, pred_std = pred_dist.mean, pred_dist.scale
     plt.plot(x_plot, pred_mean)
     plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.4)
 
     gp.reset_to_prior()
-    pred_dist = gp.predict(x_plot)
-    plt.plot(x_plot, pred_dist.mean)
+    pred_mean, pred_std = gp.predict(x_plot, return_density=False)
+    plt.plot(x_plot, pred_mean)
 
     plt.scatter(x_data_test, y_data_test)
     plt.scatter(x_data_train, y_data_train)

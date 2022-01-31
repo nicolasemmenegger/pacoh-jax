@@ -1,5 +1,4 @@
 import functools
-import itertools
 import warnings
 
 import numpy as np
@@ -10,8 +9,7 @@ from numpyro.distributions import Independent, MultivariateNormal, Normal
 from torch.utils import data as torch_data
 from torch.utils.data.sampler import Sampler
 
-from pacoh.modules.distributions import AffineTransformedDistribution, get_diagonal_gaussian
-from pacoh.util.typing import RawPredFunc, NormalizedPredFunc
+from pacoh.modules.distributions import get_diagonal_gaussian
 
 
 class DataNormalizer:
@@ -29,17 +27,16 @@ class DataNormalizer:
 
     @classmethod
     def from_meta_tuples(cls, meta_train_tuples, normalize_data=True, flatten_ys=False):
+        """ Initializes a Normalizer based on the provided meta-dataset. """
         xs_stack, ys_stack = map(list,
-                                 zip(*[handle_batch_input_dimensionality(x_train, y_train, flatten_ys=flatten_ys) for x_train, y_train in
-                                       meta_train_tuples]))
+                                 zip(*[handle_batch_input_dimensionality(x_train, y_train, flatten_ys=flatten_ys)
+                                       for x_train, y_train in meta_train_tuples]))
         all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
         return cls.from_dataset(all_xs, all_ys, normalize_data, flatten_ys)
 
     @classmethod
     def from_dataset(cls, xs, ys, normalize_data=True, flatten_ys=False):
-        """
-        Computes mean and std of the dataset and sets the statistics
-        """
+        """ Initializes a Normalizer based on the provided dataset. """
         xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=flatten_ys)
         assert not flatten_ys or (flatten_ys and xs.ndim == 2 and ys.ndim == 1), "Something seems off with your data"
         assert flatten_ys or (not flatten_ys and xs.ndim == 2 and ys.ndim == 2), "Something seems off with your data"
@@ -55,21 +52,16 @@ class DataNormalizer:
 
     def normalize_data(self, xs, ys=None):
         """
-        Normalizes the data according to the stored statistics and returns the normalized data
+        Normalizes the data according to the stored statistics and returns the normalized data.
         Assumes the data already has the correct dimensionality.
         """
-        # if ys is None:
-        #     return xs
-        # else:
-        #     return xs, ys
-
         if self.turn_off_normalization:
             if ys is None:
                 return xs
             else:
                 return xs, ys
 
-        xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :] # check whether this is correct
+        xs_normalized = (xs - self.x_mean[None, :]) / self.x_std[None, :]  # check whether this is correct
         if ys is None:
             return xs_normalized
         else:
@@ -88,47 +80,41 @@ class DataNormalizer:
             return self.normalize_data(xs)
 
     def handle_meta_tuples(self, meta_tuples):
-        warnings.warn("something is really weird here: fix later")
-        # TODO this needs to change here
-        alt = [handle_batch_input_dimensionality(xs, ys, flatten_ys=self.flatten_ys) for xs, ys in meta_tuples]
-        alt = [((xs+0.17)/2.76, (ys-4.92)/1.6) for xs, ys in alt]
-        ret = [self.handle_data(xs, ys) for xs, ys in meta_tuples]
-        return alt
+        """ Method for convenience. Handles the dimensionality of the meta_tuples and normalizes them based on the
+        stored statistics. """
+        return [self.handle_data(xs, ys) for xs, ys in meta_tuples]
 
-def normalize_predict(predict_fn: RawPredFunc):
+
+def normalize_predict(predict_fn):
     """
-    Important note: when applying this decorator to a method, the resulting method is extended with the argument
+    Decorator taking the predict method of a RegressionModule as input and outputs the same method
+    but applying normalization beforehand and de-normalization afterwards
+
+    Note: when applying this decorator to a method, the resulting method is extended with the argument
         return_density, defaulting to the value True
     """
-
-    # def f(self, test_xs, return_density=True):
-    #     dist = predict_fn(self, handle_batch_input_dimensionality(test_xs))
-    # 
-    #     if return_density:
-    #         return dist
-    #     else:
-    #         return dist.mean, jnp.sqrt(dist.variance)
-    # 
-    # return f
-
     def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
 
         if not self._normalizer.turn_off_normalization:
-            mean = self._normalizer.y_mean
-            std = self._normalizer.y_std
+            y_mean = self._normalizer.y_mean
+            y_std = self._normalizer.y_std
         else:
-            mean = jnp.zeros_like(self._normalizer.y_mean)
-            std = jnp.ones_like(self._normalizer.y_std)
+            y_mean = jnp.zeros_like(self._normalizer.y_mean)
+            y_std = jnp.ones_like(self._normalizer.y_std)
 
         if return_full_covariance and not return_density:
-            warnings.warn("You want the full covariance but only asked for mean and std of individual points... return_density ignored")
+            warnings.warn("You want the full covariance but only asked for mean and std of individual " +
+                          "points... return_density ignored")
             warnings.warn("There is probably a smarter thing to do here")
+            return_full_covariance = False
 
-        new_loc = self._normalizer.y_std * pred_dist.loc + self._normalizer.y_mean
+        new_loc = y_std * pred_dist.loc + y_mean
+
+        # Different normalization procedure depending on the type of the underlying predictive distribution
         if isinstance(pred_dist, Independent):
-            new_scale = jnp.sqrt(pred_dist.variance) * self._normalizer.y_std
+            new_scale = jnp.sqrt(pred_dist.variance) * y_std
             transformed = Normal(new_loc, new_scale)
 
             assert transformed.variance.shape == pred_dist.variance.shape
@@ -143,29 +129,22 @@ def normalize_predict(predict_fn: RawPredFunc):
             else:
                 return new_loc, new_scale
 
-
         elif isinstance(pred_dist, MultivariateNormal):
             assert self.flatten_ys, "Multivariate normals with multidimensional outputs are not supported (yet?)"
-            new_cov = pred_dist.covariance_matrix * self._normalizer.y_std ** 2
+            new_cov = pred_dist.covariance_matrix * y_std ** 2
             transformed = MultivariateNormal(loc=new_loc, covariance_matrix=new_cov)
 
             if return_full_covariance:
                 return transformed
 
             diag_std = jnp.sqrt(jnp.diag(new_cov))
+            pass
             if return_density:
                 return get_diagonal_gaussian(new_loc, diag_std)
             else:
                 return new_loc, diag_std
         else:
             raise NotImplementedError("This posterior distribution is not supported: " + str(pred_dist.__class__))
-
-
-
-        # if return_density:
-        #     return pred_dist_transformed.iid_normal
-        # else:
-        #     return pred_dist_transformed.mean, pred_dist_transformed.stddev
 
     return normalized_predict
 
@@ -184,7 +163,10 @@ def _unflatten_index(index, max_len):
 
 
 class MetaDataset(torch_data.Dataset):
-    """ A dataset that will allow baatching over both the task and dataset level"""
+    """
+    A dataset that will allow batching over both the task and dataset level.
+        torch.data.Datasets are indexable. In our case, this means transforming a
+    """
     def __init__(self, meta_tuples):
         self.meta_tuples = meta_tuples
         self.len_per_task = [xs.shape[0] for xs, ys in meta_tuples]
@@ -206,8 +188,6 @@ class MetaBatchSamplerWithReplacement(Sampler):
         :param dataset: A dataset of meta_train_tuples
         :param task_batch_size: The number of tasks in a batch
         :param dataset_batch_size: The batch size **within** a  task
-        :param return_list: If False, will return a fully vectorizable jax.numpy.array
-        :return:
         """
         super().__init__(dataset)
         if not isinstance(dataset, MetaDataset):
@@ -224,7 +204,7 @@ class MetaBatchSamplerWithReplacement(Sampler):
             batch_indices = jax.random.choice(choice_key, self.dataset.num_tasks, shape=(self.task_batch_size,))
             indices_list = []
             for i, task in enumerate(batch_indices):
-                # get datapoints for one of the chosen task
+                # get data-points for one of the chosen task
                 task_indices = jax.random.choice(dataset_keys[i],
                                                  self.dataset.len_per_task[task],
                                                  shape=(self.dataset_batch_size,))
@@ -271,6 +251,7 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
         :param iterations: The number of batches to deliver. Should correspond to the num_iter of the train loop
         """
         sampler = torch_data.RandomSampler(meta_tuples, replacement=True, num_samples=iterations*task_batch_size)
+
         def unzip_collate(batch):
             # batch is a list of tuples of arrays
             # want: a tuple of lists of arrays
@@ -280,31 +261,16 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
 
         super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=unzip_collate)
 
-# def handle_point_input_dimensionality(self, x, y, flatten_ys: bool = False):
-#     
-#     if x.ndim == 1:
-#         x = x.reshape((-1, self._input_dim))
-# 
-#     if isinstance(y, float) or y.ndim == 0:
-#         y = np.array(y)
-#         y = y.reshape((1,))
-#     elif y.ndim == 1:
-#         if flatten_ys:
-#             y = y[0]
-#         pass
-#     else:
-#         raise AssertionError('y must not have more than 1 dim')
-#     return x, y
-
 
 def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = False):
     """
-    Takes a dataset S=(xs,ys) and returns it in a uniform fashion. x shall have shape (num_points, input_dim) and
-    y shall have size (num_points,) or (num_points, 1)
+    Takes a dataset S=(xs,ys) and returns it in desired shape whenever possible. Returned values are as follows:
+    xs shall have shape (num_points, input_dim) and
+    ys shall have size (num_points,) or (num_points, 1)
     Args:
         xs: The inputs
         ys: The labels (optional)
-        flatten: Whether to return ys as (num_points), or (num_points, 1)
+        flatten_ys: Whether to return ys as (num_points), or (num_points, 1)
     Notes:
         ys can be None, to easily handle test data.
     """
@@ -326,98 +292,3 @@ def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] =
             return xs, ys
     else:
         return xs
-
-
-
-# class Sampler:
-#     def __init__(self, xs, ys, batch_size, rds, shuffle=True):
-#         self.num_batches = xs.shape[0] // batch_size
-#         self.shuffle = shuffle
-#         self._rng = rds
-#         if shuffle:
-#             self._rng, shuffle_key = jax.random.split(self._rng)
-#             ids = jnp.arange(xs.shape[0])
-#             perm = jax.random.permutation(shuffle_key, ids)
-#             self.i = -1
-#             self.xs = xs
-#             self.ys = ys
-#             warnings.warn("This is definitely wrong")
-#         else:
-#             self.xs = xs
-#             self.ys = ys
-#
-#         self.batch_size = batch_size
-#         warnings.warn(
-#             "this currently does not support a scenario in which the dataset size is not divisible by the batch size")
-#
-#     def __iter__(self):
-#         return self
-#
-#     def __next__(self):
-#         if self.shuffle:
-#             # just iterate
-#             self.i = (self.i + 1) % self.num_batches
-#             start = self.i * self.batch_size
-#             end = start + self.batch_size
-#             return self.xs[start:end], self.ys[start:end]
-#         else:
-#             # just subsample at random using the _rds
-#             raise NotImplementedError("only shuffle mode is supported for now")
-
-
-# """ ----- Some simple data loaders ----- """
-# class MetaSampler:
-#     def __init__(self, meta_tuples, task_batch_size, rds, shuffle=True, minibatch_at_dataset_level=False, dataset_batch_size=None):
-#         if minibatch_at_dataset_level and dataset_batch_size is None:
-#             raise AssertionError("Please specify a dataset_batch_size")
-#
-#         num_tuples = len(meta_tuples)
-#         self.num_task_batches = num_tuples // task_batch_size
-#         self.shuffle = shuffle
-#         self._rng = rds
-#         self.task_batch_size = task_batch_size
-#
-#         if minibatch_at_dataset_level:
-#             # initialize one sampler per dataset
-#             self._rng, *sampler_keys = jax.random.split(self._rng, num_tuples + 1)
-#             self.samplers = [Sampler(data[0], data[1], dataset_batch_size, key)
-#                              for data, key in zip(meta_tuples, sampler_keys)]
-#             self.dataset_batch_size = dataset_batch_size
-#
-#         self.minibatch_at_dataset_level = minibatch_at_dataset_level
-#
-#         if shuffle:
-#             self._rng, shuffle_key = jax.random.split(self._rng)
-#             ids = jnp.arange(len(meta_tuples))
-#             perm = jax.random.permutation(shuffle_key, ids)
-#             self.i = -1
-#             self.xs_list = [meta_tuples[i][0] for i in perm]
-#             self.ys_list = [meta_tuples[i][1] for i in perm]
-#             self.samplers = [self.samplers[i] for i in perm]
-#         else:
-#             self.meta_tuples = meta_tuples
-#
-#         warnings.warn(
-#             "this currently does not support a scenario in which the dataset size is not divisible by the batch size")
-#
-#     def __iter__(self):
-#         return self
-#
-#     def __next__(self):
-#         if self.shuffle:
-#             # just iterate
-#             self.i = (self.i + 1) % self.num_task_batches
-#             start = self.i * self.task_batch_size
-#             end = start + self.task_batch_size
-#             if self.minibatch_at_dataset_level:
-#                 subsampled_tuples = [next(sampler) for sampler in self.samplers[start:end]]
-#                 array_xs = jnp.stack([tup[0] for tup in subsampled_tuples], axis=0)
-#                 array_ys = jnp.stack([tup[1] for tup in subsampled_tuples], axis=0)
-#
-#                 return array_xs, array_ys
-#             else:
-#                 # just return a list of tasks
-#                 return self.xs_list[start:end], self.ys_list[start:end]
-#         else:
-#             # just subsample at random using the _rds
-#             raise NotImplementedError("only shuffle mode is supported for now")

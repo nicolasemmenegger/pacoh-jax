@@ -13,13 +13,17 @@ from pacoh.util.tree import Tree, pytree_sum, pytree_shape, pytree_unstack
 class SVGD:
     def __init__(self, target_log_prob_batched, kernel_forward_pytree, optimizer, optimizer_state):
         """
-        :param target_log_prob: pure forward function that takes [(tree with vectorized leaves of particle params), possibly rngs, shared data batch]
-        :param kernel_forward: The vmapped version of a function which takes two pytrees of parameters and thus returns a kernel matrix
-        :param optimizer: An optimizer working one the pytree of particles
+        :param target_log_prob_batched: pure forward function that takes [(tree with vectorized leaves of
+            particle params), possibly rngs, shared data batch]
+        :param kernel_forward: The vmapped version of a function which takes two pytrees of parameters and thus returns
+            a kernel matrix
+        :param optimizer: An optimizer optimizing over the pytree of particles
 
         Notes:
-            * in the standard case, target_log_probs will take model params and output an MLL + prior ll estimate
-            * in the meta-learning case, target_log_probs will take prior parameters and return an expected MLL + prior ll estimate
+            * in the "standard" learning case, target_log_probs will take model params and output an MLL + prior-ll
+                estimate
+            * in the meta-learning case, target_log_probs will take prior parameters and return an expected MLL
+            + prior ll estimate
         """
         # a) score function
         self.log_prob_and_score = jax.value_and_grad(lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data)))

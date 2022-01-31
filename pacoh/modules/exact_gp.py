@@ -40,7 +40,7 @@ class JAXExactGP:
         return self.likelihood(self.prior(dummy_xs))
 
     def _ys_centered(self, xs, ys):
-        return ys - self.mean_module(xs).flatten()
+        return ys.flatten() - self.mean_module(xs).flatten()
 
     def _data_cov_with_noise(self, xs):
         data_cov = self.cov_set_set(xs, xs)
