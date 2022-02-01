@@ -3,10 +3,12 @@ from meta_bo.solver import FiniteDomainSolver, EvolutionarySolver
 
 import numpy as np
 
+
 class Acquisition:
     """
     Algorithm which is defined through an acquisition function.
     """
+
     def __init__(self, model, domain, x0=None, solver=None, random_state=None):
         super().__init__()
 
@@ -46,8 +48,9 @@ class Acquisition:
 
     def __getstate__(self):
         self_dict = self.__dict__.copy()
-        del self_dict['solver']
+        del self_dict["solver"]
         return self_dict
+
 
 class UCB(Acquisition):
     def __init__(self, model, domain, beta=2.0, **kwargs):

@@ -17,16 +17,18 @@ from pacoh.util.tree import Tree
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 
 
-def neg_elbo(posterior: GaussianBeliefState,
-             key: jax.random.PRNGKey,
-             x_batch: jnp.array,
-             y_batch: jnp.array,
-             prior: GaussianBeliefState,
-             prior_weight: float,
-             batch_size_vi: int,
-             num_train_points: int,
-             log_prob_fn: Callable[[Tree, jax.random.PRNGKey, jnp.array, jnp.array], jnp.array],
-             batch_pred_fn: Callable[[Tree, jax.random.PRNGKey, jnp.array], jnp.array]):
+def neg_elbo(
+    posterior: GaussianBeliefState,
+    key: jax.random.PRNGKey,
+    x_batch: jnp.array,
+    y_batch: jnp.array,
+    prior: GaussianBeliefState,
+    prior_weight: float,
+    batch_size_vi: int,
+    num_train_points: int,
+    log_prob_fn: Callable[[Tree, jax.random.PRNGKey, jnp.array, jnp.array], jnp.array],
+    batch_pred_fn: Callable[[Tree, jax.random.PRNGKey, jnp.array], jnp.array],
+):
     """
     :param posterior: dict of GaussianBeliefState
     :param key: jax.random.PRNGkey
@@ -54,7 +56,9 @@ def neg_elbo(posterior: GaussianBeliefState,
     avg_log_likelihood = jnp.mean(log_likelihoods)
 
     # kl computation (regularization)
-    kl_divergence = GaussianBelief.log_prob(posterior, batched_params) - GaussianBelief.log_prob(prior, batched_params)
+    kl_divergence = GaussianBelief.log_prob(posterior, batched_params) - GaussianBelief.log_prob(
+        prior, batched_params
+    )
     avg_kl_divergence = jnp.mean(kl_divergence)
 
     # result computation
@@ -62,22 +66,24 @@ def neg_elbo(posterior: GaussianBeliefState,
 
 
 class BayesianNeuralNetworkVI(RegressionModel):
-    def __init__(self,
-                 input_dim: int,
-                 output_dim: int,
-                 normalize_data: bool = True,
-                 normalizer: DataNormalizer = None,
-                 random_state: jax.random.PRNGKey = None,
-                 hidden_layer_sizes=(32, 32),
-                 activation: Callable = jax.nn.elu,
-                 learn_likelihood: bool = True,
-                 prior_std: float = 1.0,
-                 prior_weight: float = 0.1,
-                 likelihood_prior_mean: float = jnp.log(0.1),
-                 likelihood_prior_std: float = 1.0,
-                 batch_size_vi: int = 10,
-                 batch_size: int = 8,
-                 lr: float = 1e-3):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        normalize_data: bool = True,
+        normalizer: DataNormalizer = None,
+        random_state: jax.random.PRNGKey = None,
+        hidden_layer_sizes=(32, 32),
+        activation: Callable = jax.nn.elu,
+        learn_likelihood: bool = True,
+        prior_std: float = 1.0,
+        prior_weight: float = 0.1,
+        likelihood_prior_mean: float = jnp.log(0.1),
+        likelihood_prior_std: float = 1.0,
+        batch_size_vi: int = 10,
+        batch_size: int = 8,
+        lr: float = 1e-3,
+    ):
         """
         :param input_dim: The dimension of a data point
         :param normalize_data: Whether to normalize the data
@@ -94,15 +100,19 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param batch_size: The number of data points you get while training and predicting
         :param lr: The learning rate to use with the ELBO gradients
         """
-        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
-        self.batch_size = batch_size
+        super().__init__(input_dim, output_dim, normalize_data, normalizer, flatten_ys=False, random_state=random_state)
+        self._batch_size = batch_size
         self.batch_size_vi = batch_size_vi
 
         # a) Get batched forward functions for the nn and likelihood
         self._rng, init_key = jax.random.split(self._rng)
-        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(output_dim, hidden_layer_sizes,
-                                                                           activation, likelihood_prior_mean,
-                                                                           learn_likelihood)
+        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(
+            output_dim,
+            hidden_layer_sizes,
+            activation,
+            likelihood_prior_mean,
+            learn_likelihood,
+        )
 
         # b) Initialize the prior and posterior
         params, template = initialize_batched_model(init, batch_size_vi, init_key, (batch_size, input_dim))
@@ -123,20 +133,22 @@ class BayesianNeuralNetworkVI(RegressionModel):
         self.optimizer_state = self.optimizer.init(self.posterior)
 
         # d) Setup pure objective function and its derivative
-        elbo_fn = functools.partial(neg_elbo, prior=self.prior, prior_weight=prior_weight,
-                                    batch_size_vi=self.batch_size_vi,
-                                    log_prob_fn=self.apply_broadcast.log_prob, batch_pred_fn=self.apply.pred)
+        elbo_fn = functools.partial(
+            neg_elbo,
+            prior=self.prior,
+            prior_weight=prior_weight,
+            batch_size_vi=self.batch_size_vi,
+            log_prob_fn=self.apply_broadcast.log_prob,
+            batch_pred_fn=self.apply.pred,
+        )
 
         self.elbo = elbo_fn
         self.elbo_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(elbo_fn)))
         self.pred_dist_apply = jax.jit(self.apply.pred_dist)
 
     def _recompute_posterior(self, num_iter_fit=500):
-        """Fits the underlying GP to the currently stored datapoints. """
+        """Fits the underlying GP to the currently stored datapoints."""
         warnings.warn("_recompute posterior does nothing for now")
-        # How about just doing
-        # self.posterior = self.prior
-        # self.fit(num_iter_fit) maybe with a predefined number of iterations
 
     def fit(self, xs_val=None, ys_val=None, log_period=500, num_iter_fit=None):
         super().fit(xs_val, ys_val, log_period, num_iter_fit)
@@ -145,19 +157,25 @@ class BayesianNeuralNetworkVI(RegressionModel):
     def predict(self, xs, num_posterior_samples=20):
         self._rng, key = jax.random.split(self._rng)
         nn_params = GaussianBelief.rsample(self.posterior, key, num_posterior_samples)
-        return get_mixture(self.pred_dist_apply(nn_params, None, xs), num_posterior_samples)
+        batched_pred_dists = self.pred_dist_apply(nn_params, None, xs)
+        return get_mixture(batched_pred_dists, num_posterior_samples)
 
     def _step(self, x_batch, y_batch):
         self._rng, step_key = jax.random.split(self._rng)
-        nelbo, gradelbo = self.elbo_val_and_grad(self.posterior, step_key, x_batch, y_batch,
-                                                 num_train_points=self._num_train_points)
+        nelbo, gradelbo = self.elbo_val_and_grad(
+            self.posterior,
+            step_key,
+            x_batch,
+            y_batch,
+            num_train_points=self._num_train_points,
+        )
         updates, new_opt_state = self.optimizer.update(gradelbo, self.optimizer_state, self.posterior)
         self.optimizer_state = new_opt_state
         self.posterior = optax.apply_updates(self.posterior, updates)
         return nelbo
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     np.random.seed(1)
 
     d = 1  # dimensionality of the data
@@ -172,8 +190,14 @@ if __name__ == '__main__':
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
-    nn = BayesianNeuralNetworkVI(input_dim=d, output_dim=1, batch_size_vi=10, hidden_layer_sizes=(32, 32), prior_weight=0.001,
-                                 learn_likelihood=True)
+    nn = BayesianNeuralNetworkVI(
+        input_dim=d,
+        output_dim=1,
+        batch_size_vi=10,
+        hidden_layer_sizes=(32, 32),
+        prior_weight=0.001,
+        learn_likelihood=True,
+    )
     nn.add_data_points(x_train, y_train)
 
     n_iter_fit = 200  # 2000

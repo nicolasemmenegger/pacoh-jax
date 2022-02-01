@@ -17,58 +17,94 @@ from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean, JAXZeroMean
 from pacoh.modules.kernels import JAXKernel, JAXRBFKernel
 from pacoh.modules.distributions import multivariate_kl, JAXGaussianLikelihood
-from pacoh.util.initialization import initialize_model_with_state, initialize_optimizer, initialize_model
+from pacoh.util.initialization import (
+    initialize_model_with_state,
+    initialize_optimizer,
+    initialize_model,
+)
 
 
 class F_PACOH_MAP_GP(RegressionModelMetaLearned):
-    def __init__(self,
-                 input_dim: int,
-                 output_dim: int,
-                 domain: Union[DiscreteDomain, ContinuousDomain],
-                 learning_mode: str = 'both',
-                 weight_decay: float = 0.0,
-                 feature_dim: int = 2,
-                 covar_module: Union[str, Callable[[], JAXKernel]] = 'NN',
-                 mean_module: Union[str, Callable[[], JAXMean]] = 'NN',
-                 mean_nn_layers: Collection[int] = (32, 32),
-                 kernel_nn_layers: Collection[int] = (32, 32),
-                 task_batch_size: int = 5,
-                 num_tasks: int = None,
-                 lr: float = 1e-3,
-                 lr_decay: float = 1.0,
-                 prior_weight=0.1,  # kappa
-                 train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
-                 num_samples_kl=20,
-                 hyperprior_lengthscale=0.3,
-                 hyperprior_outputscale=2.0,
-                 hyperprior_noise_var=1e-3,  # this has numerical stability implications
-                 normalize_data: bool = True,
-                 normalizer: DataNormalizer = None,
-                 random_state: jax.random.PRNGKey = None):
-        super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state, task_batch_size, num_tasks, flatten_ys=True)
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        domain: Union[DiscreteDomain, ContinuousDomain],
+        learning_mode: str = "both",
+        weight_decay: float = 0.0,
+        feature_dim: int = 2,
+        covar_module: Union[str, Callable[[], JAXKernel]] = "NN",
+        mean_module: Union[str, Callable[[], JAXMean]] = "NN",
+        mean_nn_layers: Collection[int] = (32, 32),
+        kernel_nn_layers: Collection[int] = (32, 32),
+        task_batch_size: int = 5,
+        num_tasks: int = None,
+        lr: float = 1e-3,
+        lr_decay: float = 1.0,
+        prior_weight=0.1,  # kappa
+        train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
+        num_samples_kl=20,
+        hyperprior_lengthscale=0.3,
+        hyperprior_outputscale=2.0,
+        hyperprior_noise_var=1e-3,  # this has numerical stability implications
+        normalize_data: bool = True,
+        normalizer: DataNormalizer = None,
+        random_state: jax.random.PRNGKey = None,
+    ):
+        super().__init__(
+            input_dim,
+            output_dim,
+            normalize_data,
+            normalizer,
+            random_state,
+            task_batch_size,
+            num_tasks,
+            flatten_ys=True,
+        )
 
         assert isinstance(domain, ContinuousDomain) or isinstance(domain, DiscreteDomain)
         assert domain.d == input_dim, "Domain and input dimension don't match"
-        assert learning_mode in ['learn_mean', 'learn_kernel', 'both', 'vanilla_gp'], 'Invalid learning mode'
-        assert mean_module in ['NN', 'constant', 'zero'] or isinstance(mean_module, JAXMean), 'Invalid mean_module option'
-        assert covar_module in ['NN', 'SE'] or isinstance(covar_module, JAXKernel), 'Invalid covar_module option'
-
+        assert learning_mode in [
+            "learn_mean",
+            "learn_kernel",
+            "both",
+            "vanilla_gp",
+        ], "Invalid learning mode"
+        assert mean_module in ["NN", "constant", "zero"] or isinstance(
+            mean_module, JAXMean
+        ), "Invalid mean_module option"
+        assert covar_module in ["NN", "SE"] or isinstance(
+            covar_module, JAXKernel
+        ), "Invalid covar_module option"
         """-------- Setup haiku differentiable functions and parameters -------"""
-        pacoh_map_closure = construct_gp_base_learner(input_dim, output_dim, mean_module, covar_module,
-                                                      learning_mode, feature_dim, mean_nn_layers, kernel_nn_layers,
-                                                      learn_likelihood=True, initial_noise_std=1.0)
+        pacoh_map_closure = construct_gp_base_learner(
+            input_dim,
+            output_dim,
+            mean_module,
+            covar_module,
+            learning_mode,
+            feature_dim,
+            mean_nn_layers,
+            kernel_nn_layers,
+            learn_likelihood=True,
+            initial_noise_std=1.0,
+        )
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
-        self.particle, empty_state = initialize_model_with_state(init_fn, init_key, (task_batch_size, input_dim))
+        self.particle, empty_state = initialize_model_with_state(
+            init_fn, init_key, (task_batch_size, input_dim)
+        )
         self.state = self.empty_state = empty_state
 
         # construct the hyperprior in function space
         def hyperprior_impure(xs):
             hyperprior_mean = JAXZeroMean(output_dim)
             hyperprior_covar = JAXRBFKernel(input_dim, hyperprior_lengthscale, hyperprior_outputscale)
-            hyperprior_likelihood = JAXGaussianLikelihood(output_dim=output_dim,
-                                                          variance=0.0,  # does not matter, only used for prior
-                                                          learn_likelihood=False)
+            hyperprior_likelihood = JAXGaussianLikelihood(
+                output_dim=output_dim,
+                variance=0.0,  # does not matter, only used for prior
+                learn_likelihood=False,
+            )
 
             # the hyperprior is a dirac distribution over exactly one GP
             gp_hyperprior_particle = JAXExactGP(hyperprior_mean, hyperprior_covar, hyperprior_likelihood)
@@ -81,7 +117,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self._rng, sample_key = jax.random.split(self._rng)
 
         def target_post_prob(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
-            """ Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
+            """Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
             number of elements of shape [input_size]. Similarly for meta_ys
             """
             loss = 0.0
@@ -90,14 +126,14 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                 # marginal ll
                 mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
                 kl = self._functional_kl(particle, k, xs)
-                # if jnp.isnan(kl):
-                #     print("hello")
-                #     kl = self._functional_kl(particle, k, xs)
-                n = num_tasks
-                m = xs.shape[0]
 
                 # this is formula (3) from pacoh, and prior_weight corresponds to kappa
-                loss += - mll / (task_batch_size * m) + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
+                n = num_tasks
+                m = xs.shape[0]
+                loss += (
+                    -mll / (task_batch_size * m)
+                    + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
+                )
 
             return loss
 
@@ -111,8 +147,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self.num_samples_kl = num_samples_kl
 
         # optimizer setup
-        self.optimizer, self.optimizer_state = initialize_optimizer("AdamW", lr, self.particle,
-                                                                    lr_decay, weight_decay=weight_decay)
+        self.optimizer, self.optimizer_state = initialize_optimizer(
+            "AdamW", lr, self.particle, lr_decay, weight_decay=weight_decay
+        )
 
     def _meta_step(self, mini_batch) -> float:
         xs_batch, ys_batch = mini_batch
@@ -129,11 +166,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner
-        _, self.state = self._apply_fns.base_learner_fit(self.particle,
-                                                         self.empty_state,
-                                                         None,
-                                                         self._xs_data,
-                                                         self._ys_data)
+        _, self.state = self._apply_fns.base_learner_fit(
+            self.particle, self.empty_state, None, self._xs_data, self._ys_data
+        )
 
     def _sample_measurement_set(self, k, xs_train):
         if self.train_data_in_kl:
@@ -164,7 +199,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyperposterior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
         hyperprior = self.hyperprior_marginal(xs_kl)
 
-        assert isinstance(hyperposterior, MultivariateNormal), "both hyperprior and hyperposterior should have same shape"
+        assert isinstance(
+            hyperposterior, MultivariateNormal
+        ), "both hyperprior and hyperposterior should have same shape"
 
         def compute_kl_with_noise(noise):
             # computes the kl divergence between hyperprior and hyperposterior, by adding a little diagonal noise to the
@@ -176,19 +213,21 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             return kl
 
         # this is both differentiable and jittable
-        # but admittedly quite ugly:
         # https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#control-flow
         # standard for loop is differentiable as condition does not depend on data
-        # this will simply be unrolled TODO think
         kl = jnp.nan
         inject_noise_var = self.hyperprior_noise_var
         for _ in range(5):
             # this
-            kl = jax.lax.cond(jnp.isnan(kl), lambda n: compute_kl_with_noise(n), lambda _: kl, inject_noise_var)
+            kl = jax.lax.cond(
+                jnp.isnan(kl),
+                lambda n: compute_kl_with_noise(n),
+                lambda _: kl,
+                inject_noise_var,
+            )
             inject_noise_var *= 2
 
         return kl
-
 
     def _clear_data(self):
         super()._clear_data()
@@ -196,8 +235,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
 if __name__ == "__main__":
     from jax.config import config
+
     config.update("jax_debug_nans", False)
-    config.update('jax_disable_jit', False)
+    config.update("jax_disable_jit", False)
 
     from experiments.data_sim import SinusoidDataset
 
@@ -214,23 +254,32 @@ if __name__ == "__main__":
     if plot:
         for x_train, y_train in meta_train_data:
             plt.scatter(x_train, y_train)
-        plt.title('sample from the GP prior')
+        plt.title("sample from the GP prior")
         plt.show()
-
     """ 2) Classical mean learning based on mll """
 
-    print('\n ---- GPR mll meta-learning ---- ')
+    print("\n ---- GPR mll meta-learning ---- ")
 
     torch.set_num_threads(2)
 
     for weight_decay in [0.5]:
-        pacoh_map = F_PACOH_MAP_GP(1, 1, ContinuousDomain(jnp.ones((1,))*-6, jnp.ones((1,))*6), learning_mode='both', weight_decay=weight_decay, task_batch_size=5,
-                                 num_tasks=num_train_tasks,
-                                covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS, feature_dim=2,
-                                kernel_nn_layers=NN_LAYERS)
+        pacoh_map = F_PACOH_MAP_GP(
+            1,
+            1,
+            ContinuousDomain(jnp.ones((1,)) * -6, jnp.ones((1,)) * 6),
+            learning_mode="both",
+            weight_decay=weight_decay,
+            task_batch_size=5,
+            num_tasks=num_train_tasks,
+            covar_module="NN",
+            mean_module="NN",
+            mean_nn_layers=NN_LAYERS,
+            feature_dim=2,
+            kernel_nn_layers=NN_LAYERS,
+        )
 
         itrs = 0
-        print("---- weight-decay =  %.4f ----"%weight_decay)
+        print("---- weight-decay =  %.4f ----" % weight_decay)
 
         for i in range(40):
             n_iter = 500
@@ -244,7 +293,9 @@ if __name__ == "__main__":
             # prior prediction
             pacoh_map._clear_data()
             prior_lcb, prior_ucb = pacoh_map.confidence_intervals(x_plot)
-            prior_mean, prior_std = pacoh_map.predict(x_plot, return_density=False, return_full_covariance=False)
+            prior_mean, prior_std = pacoh_map.predict(
+                x_plot, return_density=False, return_full_covariance=False
+            )
 
             # posterior prediction
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
@@ -260,8 +311,16 @@ if __name__ == "__main__":
             plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.15, color="blue")
 
             # plot prior
-            plt.plot(x_plot, prior_mean, color="orange")  # the curve we fitted based on the target test points
-            plt.fill_between(x_plot, prior_lcb.flatten(), prior_ucb.flatten(), alpha=0.15, color="orange")
+            plt.plot(
+                x_plot, prior_mean, color="orange"
+            )  # the curve we fitted based on the target test points
+            plt.fill_between(
+                x_plot,
+                prior_lcb.flatten(),
+                prior_ucb.flatten(),
+                alpha=0.15,
+                color="orange",
+            )
 
-            plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
+            plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
             plt.show()

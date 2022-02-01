@@ -14,25 +14,29 @@ class JAXMean(hk.Module):
 
 
 class JAXConstantMean(JAXMean):
-    """Mean module with a learnable mean. """
+    """Mean module with a learnable mean."""
+
     def __init__(self, output_dim=1, initial_constant=0.0):
         super().__init__()
         self.output_dim = output_dim
         if isinstance(initial_constant, float):
-            self.init_constant = jnp.ones((output_dim,))*initial_constant
+            self.init_constant = jnp.ones((output_dim,)) * initial_constant
         else:
             self.init_constant = initial_constant
 
     def __call__(self, xs):
         # works for both batch or unbatched
-        mean = hk.get_parameter("mu", shape=[self.output_dim],
-                                init=hk.initializers.Constant(self.init_constant))
+        mean = hk.get_parameter(
+            "mu",
+            shape=[self.output_dim],
+            init=hk.initializers.Constant(self.init_constant),
+        )
         return jnp.ones(xs.shape[:-1] + (self.output_dim,)) * mean
 
 
-
 class JAXZeroMean(JAXMean):
-    """Always zero, not learnable. """
+    """Always zero, not learnable."""
+
     def __init__(self, output_dim):
         super().__init__()
         self.output_dim = output_dim

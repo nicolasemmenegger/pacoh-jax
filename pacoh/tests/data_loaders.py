@@ -9,15 +9,22 @@ class DataLoaderTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ar = jnp.arange
-        self.meta_tuples = [(ar(101, 109), ar(111, 119)), (ar(201, 209), ar(211, 219)), (ar(301, 307), ar(311, 317)),
-                            (ar(401, 408), ar(411, 418)), (ar(501, 507), ar(511, 517))]
+        self.meta_tuples = [
+            (ar(101, 109), ar(111, 119)),
+            (ar(201, 209), ar(211, 219)),
+            (ar(301, 307), ar(311, 317)),
+            (ar(401, 408), ar(411, 418)),
+            (ar(501, 507), ar(511, 517)),
+        ]
 
         self.task_batch_size = 2
         self.dataset_batch_size = 3
         self.num_batches_i_want = 41
 
         self.dataloader_one = MetaDataLoaderOneLevel(self.meta_tuples, 2, iterations=self.num_batches_i_want)
-        self.dataloader_two = MetaDataLoaderTwoLevel(self.meta_tuples, 2, 3, iterations=self.num_batches_i_want)
+        self.dataloader_two = MetaDataLoaderTwoLevel(
+            self.meta_tuples, 2, 3, iterations=self.num_batches_i_want
+        )
 
     def test_num_iterations(self):
         count = 0
@@ -42,4 +49,3 @@ class DataLoaderTest(unittest.TestCase):
         for xs, ys in self.dataloader_two:
             self.assertEqual(xs.shape, (self.task_batch_size, self.dataset_batch_size, 1))
             self.assertEqual(ys.shape, (self.task_batch_size, self.dataset_batch_size, 1))
-

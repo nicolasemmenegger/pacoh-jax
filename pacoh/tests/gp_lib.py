@@ -16,6 +16,7 @@ class TestMeanAndKernels(unittest.TestCase):
     def test_means(self):
         for input_dim in range(1, 4):
             for output_dim in range(1, 4):
+
                 def forward(xs):
                     module = JAXZeroMean(output_dim=output_dim)
                     return module(xs)
@@ -25,12 +26,17 @@ class TestMeanAndKernels(unittest.TestCase):
                     return module(xs)
 
                 def const_fwd_two(xs):
-                    module = JAXConstantMean(output_dim=output_dim, initial_constant=jnp.ones((output_dim,)) * 3.14)
+                    module = JAXConstantMean(
+                        output_dim=output_dim,
+                        initial_constant=jnp.ones((output_dim,)) * 3.14,
+                    )
                     return module(xs)
 
                 num_samps = 10
                 fwds = [forward, const_fwd, const_fwd_two]
-                expected = [jnp.zeros((num_samps, output_dim))] + [jnp.ones((num_samps, output_dim))*3.14]*2
+                expected = [jnp.zeros((num_samps, output_dim))] + [
+                    jnp.ones((num_samps, output_dim)) * 3.14
+                ] * 2
 
                 for fwd, expectation in zip(fwds, expected):
                     init, apply = hk.transform(fwd)
@@ -98,8 +104,12 @@ class TestAuxiliaryStuff(unittest.TestCase):
         npd1 = MultivariateNormal(l1, cov1)
         npd2 = MultivariateNormal(l2, cov2)
 
-        torchd1 = torch.distributions.MultivariateNormal(self.jnp_to_torch_tensor(l1), self.jnp_to_torch_tensor(cov1))
-        torchd2 = torch.distributions.MultivariateNormal(self.jnp_to_torch_tensor(l2), self.jnp_to_torch_tensor(cov2))
+        torchd1 = torch.distributions.MultivariateNormal(
+            self.jnp_to_torch_tensor(l1), self.jnp_to_torch_tensor(cov1)
+        )
+        torchd2 = torch.distributions.MultivariateNormal(
+            self.jnp_to_torch_tensor(l2), self.jnp_to_torch_tensor(cov2)
+        )
 
         mykl = multivariate_kl(npd1, npd2)
         torchkl = torch.distributions.kl_divergence(torchd1, torchd2)
@@ -111,10 +121,9 @@ class TestAuxiliaryStuff(unittest.TestCase):
         return torch.from_numpy(np.array(arr))
 
 
-
 class TestExactGP(unittest.TestCase):
     pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

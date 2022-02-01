@@ -7,6 +7,7 @@ import haiku as hk
 
 from pacoh.util.tree import Tree, pytree_sum
 
+
 # We make this a namedtuple so that we can use it as a pytree
 # In particular, we can differentiate with respect to the parameters stored in here
 class GaussianBeliefState(NamedTuple):
@@ -30,8 +31,11 @@ class GaussianBeliefState(NamedTuple):
         return cls(mean=mean, log_std=log_std)
 
     @classmethod
-    def initialize_heterogenous(cls, mean_std_map: Callable[[str, str, jnp.array], Tuple[float, float]],
-                                template_tree: Tree):
+    def initialize_heterogenous(
+        cls,
+        mean_std_map: Callable[[str, str, jnp.array], Tuple[float, float]],
+        template_tree: Tree,
+    ):
         """
         Initialize based on a map that takes (module_name, parameter_name, parameter_value)
         :param mean_std_map: a float indicating the mean for each parameter to use for initialization or a pytree
@@ -83,8 +87,10 @@ class GaussianBelief:
         # get a tree of keys of the same shape as the mean and std tree, albeit not with same leaf shape (only need
         # one key to sample a Gaussian)
         num_params = len(jax.tree_util.tree_leaves(parameters.mean))
-        keys_tree = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(parameters.mean),
-                                                 jax.random.split(key, num_params))
+        keys_tree = jax.tree_util.tree_unflatten(
+            jax.tree_util.tree_structure(parameters.mean),
+            jax.random.split(key, num_params),
+        )
 
         def sample_leaf(leaf_mean, leaf_log_std_arr, key):
             leaf_mean = jnp.expand_dims(leaf_mean, -1)
@@ -102,11 +108,16 @@ class GaussianBelief:
         """
         samples according to a tree of Gaussianbeliefstates, which could be for instance a dictionary or a list of models
         """
-        flattened, treedef = jax.tree_util.tree_flatten(parameters, lambda p: isinstance(p, GaussianBeliefState))
-        keys_tree = jax.tree_util.tree_unflatten(treedef,
-                                                 jax.random.split(key, len(flattened)))
-        return jax.tree_multimap(jax.tree_util.Partial(GaussianBelief.rsample, num_samples=num_samples), parameters, keys_tree,
-                                 is_leaf=lambda p: isinstance(p, GaussianBeliefState))
+        flattened, treedef = jax.tree_util.tree_flatten(
+            parameters, lambda p: isinstance(p, GaussianBeliefState)
+        )
+        keys_tree = jax.tree_util.tree_unflatten(treedef, jax.random.split(key, len(flattened)))
+        return jax.tree_multimap(
+            jax.tree_util.Partial(GaussianBelief.rsample, num_samples=num_samples),
+            parameters,
+            keys_tree,
+            is_leaf=lambda p: isinstance(p, GaussianBeliefState),
+        )
 
     @staticmethod
     def log_prob(parameters: GaussianBeliefState, samples: Tree):
@@ -114,10 +125,15 @@ class GaussianBelief:
         Computes the log_probablity of a bunch of sampled parameters.
         Returns an array of size num_samples, each entry containing the log probablitiy of one sampled model
         """
+
         def leaf_log_prob(mean, std, sample):
             # assumes that params is a pytree of mean std and already stacked
-            res = numpyro.distributions.Normal(loc=mean, scale=std).log_prob(sample) # (num_samples, *mean.shape)
-            return jnp.sum(res, axis=tuple(range(1, res.ndim)))  # this sums up along the sample size direction
+            res = numpyro.distributions.Normal(loc=mean, scale=std).log_prob(
+                sample
+            )  # (num_samples, *mean.shape)
+            return jnp.sum(
+                res, axis=tuple(range(1, res.ndim))
+            )  # this sums up along the sample size direction
 
         sum = pytree_sum(jax.tree_multimap(leaf_log_prob, parameters.mean, parameters.std, samples))
 

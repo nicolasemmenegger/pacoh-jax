@@ -3,17 +3,17 @@ from abc import abstractmethod
 import numpy as np
 import math
 
-class Solver:
 
+class Solver:
     def __init__(self, domain, initial_x=None):
         self._domain = domain
         self.initial_x = initial_x
 
     def minimize(self, f):
         """
-            optimize f over domain
-            if self.requires_gradients = True, fun should return a tuple of (y,grad)
-         """
+        optimize f over domain
+        if self.requires_gradients = True, fun should return a tuple of (y,grad)
+        """
         raise NotImplementedError
 
     @property
@@ -53,28 +53,40 @@ class CandidateSolver(Solver):
     def requires_safety(self):
         return False
 
+
 class FiniteDomainSolver(CandidateSolver):
     def __init__(self, domain):
         super().__init__(domain, domain.points)
 
-class GridSolver(CandidateSolver):
 
+class GridSolver(CandidateSolver):
     def __init__(self, domain, points_per_dimension=None):
-        arrays = [np.linspace(l, u, points_per_dimension).reshape(points_per_dimension, 1) for (l, u) in
-                  zip(domain.l, domain.u)]
+        arrays = [
+            np.linspace(l, u, points_per_dimension).reshape(points_per_dimension, 1)
+            for (l, u) in zip(domain.l, domain.u)
+        ]
         grid = cartesian(arrays)
         super(GridSolver, self).__init__(domain, candidates=grid)
 
-class EvolutionarySolver(Solver):
 
-    def __init__(self, domain, survival_rate=0.9, num_particles_per_d=100, num_iter_per_d=30, initial_x=None,
-                 random_state=None):
+class EvolutionarySolver(Solver):
+    def __init__(
+        self,
+        domain,
+        survival_rate=0.9,
+        num_particles_per_d=100,
+        num_iter_per_d=30,
+        initial_x=None,
+        random_state=None,
+    ):
         super().__init__(domain, initial_x=initial_x)
         self.d = domain.d
         self.domain = domain
         self._rds = np.random if random_state is None else random_state
 
-        self.num_particles = self.d * (num_particles_per_d if num_particles_per_d is None else num_particles_per_d)
+        self.num_particles = self.d * (
+            num_particles_per_d if num_particles_per_d is None else num_particles_per_d
+        )
         self.num_iter = self.d * (num_iter_per_d if num_iter_per_d is None else num_iter_per_d)
         self.survival_rate = survival_rate if survival_rate is None else survival_rate
 
@@ -101,11 +113,10 @@ class EvolutionarySolver(Solver):
 
             # sort by fitness, eliminate worst particles and duplicate best particles
             sorted_idx = np.argsort(best_f)
-            num_elimins = math.ceil(self.num_particles * (1-self.survival_rate))
+            num_elimins = math.ceil(self.num_particles * (1 - self.survival_rate))
             new_idx = np.concatenate([sorted_idx[:-num_elimins], sorted_idx[:num_elimins]])
             best_f = best_f[new_idx]
             particles = particles[new_idx]
-
 
         best_idx = np.argmin(best_f)
 
@@ -117,8 +128,8 @@ class EvolutionarySolver(Solver):
         x = x / np.linalg.norm(x, axis=-1)[:, None]
 
         # transform in unit ball
-        u = self._rds.uniform(0, 1, size=(self.num_particles, ))
-        return x * (u**(1/self.d))[:, None]
+        u = self._rds.uniform(0, 1, size=(self.num_particles,))
+        return x * (u ** (1 / self.d))[:, None]
 
     @property
     def requires_gradients(self):
@@ -180,5 +191,5 @@ def cartesian(arrays, out=None):
     if arrays[1:]:
         cartesian(arrays[1:], out=out[0:m, 1:])
         for j in range(1, arrays[0].size):
-            out[j * m:(j + 1) * m, 1:] = out[0:m, 1:]
+            out[j * m : (j + 1) * m, 1:] = out[0:m, 1:]
     return out

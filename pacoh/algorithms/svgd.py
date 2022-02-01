@@ -6,7 +6,12 @@ import optax
 
 from jax import numpy as jnp
 
-from pacoh.modules.kernels import pytree_sq_l2_dist, pytree_rbf, pytree_rbf_set, get_pytree_rbf_fn
+from pacoh.modules.kernels import (
+    pytree_sq_l2_dist,
+    pytree_rbf,
+    pytree_rbf_set,
+    get_pytree_rbf_fn,
+)
 from pacoh.util.tree import Tree, pytree_sum, pytree_shape, pytree_unstack
 
 
@@ -26,7 +31,9 @@ class SVGD:
             + prior ll estimate
         """
         # a) score function
-        self.log_prob_and_score = jax.value_and_grad(lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data)))
+        self.log_prob_and_score = jax.value_and_grad(
+            lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data))
+        )
 
         # b) kernel grad and matrix function
         def sum_cols_of_kernel(params):
@@ -59,17 +66,21 @@ class SVGD:
         n_particles = kernel_mat_val.shape[0]
         # (i, j) corresponds to K(x_j,x_i)
 
-        kernel_grads_val = self.kernel_grads(particles) # shape (n, n, *p)
+        kernel_grads_val = self.kernel_grads(particles)  # shape (n, n, *p)
         # (i, j, *ids) corresponds to (grad_{x_j} f(x_j, x_i))[ids]
 
         @jax.jit
         def neg_phi_update_leaf(leaf_score, leaf_kernel_grads):
             # kernel_mat_val has shape (n, n) and leaf_score has shape (n, *p)
             # the resulting product has shape (n, *p) as well
-            res = (jnp.tensordot(kernel_mat_val, leaf_score, axes=1) + jnp.sum(leaf_kernel_grads, axis=1)) / n_particles
+            res = (
+                jnp.tensordot(kernel_mat_val, leaf_score, axes=1) + jnp.sum(leaf_kernel_grads, axis=1)
+            ) / n_particles
             return -res
 
-        result = jax.tree_multimap(neg_phi_update_leaf, score_val, kernel_grads_val)  # kernel_mat_val is symmetric
+        result = jax.tree_multimap(
+            neg_phi_update_leaf, score_val, kernel_grads_val
+        )  # kernel_mat_val is symmetric
         return -log_prob, result
 
     def step(self, particles, *data):
@@ -80,21 +91,28 @@ class SVGD:
 
 
 if __name__ == "__main__":
-    params = {'w1': jnp.array([[0.1, 0.1], [0.2, 0.1]]), 'b1': jnp.array([[3.0], [-1.0]])}
-    p1 = {'w1': jnp.array([0.1, 0.1]), 'w2': jnp.array([3.0])}
-    p2 = {'w1': jnp.array([0.2, 0.1]), 'w2': jnp.array([-1.0])}
+    params = {
+        "w1": jnp.array([[0.1, 0.1], [0.2, 0.1]]),
+        "b1": jnp.array([[3.0], [-1.0]]),
+    }
+    p1 = {"w1": jnp.array([0.1, 0.1]), "w2": jnp.array([3.0])}
+    p2 = {"w1": jnp.array([0.2, 0.1]), "w2": jnp.array([-1.0])}
 
     print(jax.tree_util.tree_leaves(params))
 
     def k_vec_vec(param1, param2):
         # the linear kernel
-        return jnp.exp(pytree_sum(jax.tree_multimap(lambda v1, v2: jnp.sum(-(v1-v2)**2), param1, param2)))
+        return jnp.exp(
+            pytree_sum(jax.tree_multimap(lambda v1, v2: jnp.sum(-((v1 - v2) ** 2)), param1, param2))
+        )
 
     print("no vmap", k_vec_vec(p1, p2))
     k_mat_vec = jax.vmap(k_vec_vec, in_axes=(0, None))
     k_mat_mat = jax.vmap(k_mat_vec, in_axes=(None, 0))
 
-    def F(params): # the function that sums up the kernel matrix elements along a direction
+    def F(
+        params,
+    ):  # the function that sums up the kernel matrix elements along a direction
         return jnp.sum(k_mat_mat(params, params), axis=1)
 
     kernel_gradients = (jax.jacfwd(F))(params)
@@ -102,10 +120,9 @@ if __name__ == "__main__":
 
     # test to know axes
     def f(x):
-        return jnp.array([x[0][0]**2 + x[1][0]**2, x[1][0]**2, x[0][0]**2])
+        return jnp.array([x[0][0] ** 2 + x[1][0] ** 2, x[1][0] ** 2, x[0][0] ** 2])
 
     x = jnp.array([[1.0], [2.0]])
     grads = jax.jacfwd(f)(x)
     print(f(x))
     print(grads.shape)
-

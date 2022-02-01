@@ -16,14 +16,23 @@ class TestFunctionalKL(unittest.TestCase):
         self.hyperprior_lengthscale = 1.0
         self.hyperprior_outputscale = 1.3
         self.hyperprior_noise_std = 1.0
-        self.f_pacoh_map = F_PACOH_MAP_GP(1, 1, ContinuousDomain(jnp.ones((1,)) * -6, jnp.ones((1,)) * 6),
-                                          learning_mode='both', weight_decay=0.5, task_batch_size=5,
-                                          num_tasks=5,
-                                          covar_module='NN', mean_module='NN', mean_nn_layers=(32,32), feature_dim=2,
-                                          kernel_nn_layers=(32,32),
-                                          hyperprior_lengthscale=self.hyperprior_lengthscale,
-                                          hyperprior_outputscale=self.hyperprior_outputscale,
-                                          hyperprior_noise_var=self.hyperprior_noise_std)
+        self.f_pacoh_map = F_PACOH_MAP_GP(
+            1,
+            1,
+            ContinuousDomain(jnp.ones((1,)) * -6, jnp.ones((1,)) * 6),
+            learning_mode="both",
+            weight_decay=0.5,
+            task_batch_size=5,
+            num_tasks=5,
+            covar_module="NN",
+            mean_module="NN",
+            mean_nn_layers=(32, 32),
+            feature_dim=2,
+            kernel_nn_layers=(32, 32),
+            hyperprior_lengthscale=self.hyperprior_lengthscale,
+            hyperprior_outputscale=self.hyperprior_outputscale,
+            hyperprior_noise_var=self.hyperprior_noise_std,
+        )
 
     def test_hyperprior_covariance(self):
         # this test is pretty useless now, but I have found a bug thanks to it

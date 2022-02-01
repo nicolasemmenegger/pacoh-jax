@@ -31,3 +31,10 @@ To run meta-learning of the GP prior with PACOH / F-PACOH + GP-UCB, run the foll
 ```bash
 python experiments/meta_gp_ucb.py
 ``` 
+
+## A Note on code formatting
+We (for now) use the popular black code formatter. Run 
+```bash
+black pacoh --line-length 110
+``` 
+to automatically format all the files in the pacoh directory.

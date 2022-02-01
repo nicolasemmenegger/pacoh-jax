@@ -11,8 +11,9 @@ import haiku as hk
 
 class JAXExactGP:
     """
-        A simple implementation of a gaussian process module with exact inference and Gaussian Likelihood
+    A simple implementation of a gaussian process module with exact inference and Gaussian Likelihood
     """
+
     def __init__(self, mean_module, cov_module, likelihood):
         """
         Args:
@@ -47,7 +48,7 @@ class JAXExactGP:
         return data_cov + jnp.eye(*data_cov.shape) * self.likelihood.variance()
 
     def fit(self, xs: jnp.ndarray, ys: jnp.ndarray) -> None:
-        """ Fit adds the data in any case, stores cholesky if we are at eval stage for later reuse"""
+        """Fit adds the data in any case, stores cholesky if we are at eval stage for later reuse"""
         hk.set_state("xs", jnp.array(xs))
         hk.set_state("ys", jnp.array(ys))
         data_cov_w_noise = self._data_cov_with_noise(xs)
@@ -59,13 +60,11 @@ class JAXExactGP:
         chol = hk.get_state("cholesky", dtype=jnp.float32)
 
         if xs.size > 0:
-            test_train_cov = self.cov_set_set(xs_test, xs) # TODO if something goes wrong, this shape is off
+            test_train_cov = self.cov_set_set(xs_test, xs)  # TODO if something goes wrong, this shape is off
 
             # mean prediction
             ys_cent = self._ys_centered(xs, ys).flatten()
             mean = self.mean_module(xs_test).flatten() + test_train_cov @ cho_solve((chol, True), ys_cent)
-
-
 
             if return_full_covariance:
                 # full covariance information
@@ -79,8 +78,8 @@ class JAXExactGP:
 
                 # return numpyro.Independent()
 
-            #new_cov_row = self.cov_vec_set(x, xs)
-            #ys_cent = self._ys_centered(xs, ys).flatten()
+            # new_cov_row = self.cov_vec_set(x, xs)
+            # ys_cent = self._ys_centered(xs, ys).flatten()
             # cho_sol = cho_solve((chol, True), ys_cent)
             # mean = self.mean_module(x) + jnp.dot(new_cov_row.flatten(), cho_sol)
             # var = self.cov_vec_vec(x, x) - jnp.dot(new_cov_row, cho_solve((chol, True), new_cov_row))
@@ -90,14 +89,10 @@ class JAXExactGP:
         else:
             return self.prior(xs_test)
 
-
-
-
     def pred_dist(self, xs_test):
         """prediction with noise"""
         predictive_dist_noiseless = self.posterior(xs_test)
         return self.likelihood(predictive_dist_noiseless)
-
 
     def prior(self, xs, return_full_covariance=True):
         mean = self.mean_module(xs)
@@ -107,7 +102,6 @@ class JAXExactGP:
         else:
             return get_diagonal_gaussian(mean, jnp.diag(cov))
 
-
     def add_data_and_refit(self, xs, ys):
         old_xs = hk.get_state("xs")
         old_ys = hk.get_state("ys")
@@ -116,6 +110,7 @@ class JAXExactGP:
         self.fit(all_xs, all_ys)
 
     """ ---- training utilities ---- """
+
     def marginal_ll(self, xs, ys):
         # computes the marginal log-likelihood of ys given xs and a posterior
         # computed on (xs,ys). This is differentiable and uses no stats
@@ -131,5 +126,3 @@ class JAXExactGP:
         ll -= jnp.sum(jnp.diag(cholesky[0]))  # this should be faster than trace
         ll -= xs.shape[0] / 2.0 * jnp.log(2.0 * jnp.pi)
         return ll
-
-

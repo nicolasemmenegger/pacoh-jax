@@ -1,5 +1,6 @@
 from abc import ABCMeta
 
+
 def abstractattribute(func):
     func.__is_abstract_attribute__ = True
     return func
@@ -16,14 +17,11 @@ class AbstractAttributesABCMeta(ABCMeta):
         abstract_attributes = {
             name
             for name in dir(instance)
-            if getattr(getattr(instance, name), '__is_abstract_attribute__', False)
+            if getattr(getattr(instance, name), "__is_abstract_attribute__", False)
         }
         if abstract_attributes:
             raise NotImplementedError(
                 "Can't instantiate abstract class {} with"
-                " abstract attributes: {}".format(
-                    cls.__name__,
-                    ', '.join(abstract_attributes)
-                )
+                " abstract attributes: {}".format(cls.__name__, ", ".join(abstract_attributes))
             )
         return instance

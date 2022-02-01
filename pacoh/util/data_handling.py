@@ -27,19 +27,29 @@ class DataNormalizer:
 
     @classmethod
     def from_meta_tuples(cls, meta_train_tuples, normalize_data=True, flatten_ys=False):
-        """ Initializes a Normalizer based on the provided meta-dataset. """
-        xs_stack, ys_stack = map(list,
-                                 zip(*[handle_batch_input_dimensionality(x_train, y_train, flatten_ys=flatten_ys)
-                                       for x_train, y_train in meta_train_tuples]))
+        """Initializes a Normalizer based on the provided meta-dataset."""
+        xs_stack, ys_stack = map(
+            list,
+            zip(
+                *[
+                    handle_batch_input_dimensionality(x_train, y_train, flatten_ys=flatten_ys)
+                    for x_train, y_train in meta_train_tuples
+                ]
+            ),
+        )
         all_xs, all_ys = np.concatenate(xs_stack, axis=0), np.concatenate(ys_stack, axis=0)
         return cls.from_dataset(all_xs, all_ys, normalize_data, flatten_ys)
 
     @classmethod
     def from_dataset(cls, xs, ys, normalize_data=True, flatten_ys=False):
-        """ Initializes a Normalizer based on the provided dataset. """
+        """Initializes a Normalizer based on the provided dataset."""
         xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=flatten_ys)
-        assert not flatten_ys or (flatten_ys and xs.ndim == 2 and ys.ndim == 1), "Something seems off with your data"
-        assert flatten_ys or (not flatten_ys and xs.ndim == 2 and ys.ndim == 2), "Something seems off with your data"
+        assert not flatten_ys or (
+            flatten_ys and xs.ndim == 2 and ys.ndim == 1
+        ), "Something seems off with your data"
+        assert flatten_ys or (
+            not flatten_ys and xs.ndim == 2 and ys.ndim == 2
+        ), "Something seems off with your data"
 
         input_dim = xs.shape[-1]
         output_dim = ys.shape[-1]
@@ -80,8 +90,8 @@ class DataNormalizer:
             return self.normalize_data(xs)
 
     def handle_meta_tuples(self, meta_tuples):
-        """ Method for convenience. Handles the dimensionality of the meta_tuples and normalizes them based on the
-        stored statistics. """
+        """Method for convenience. Handles the dimensionality of the meta_tuples and normalizes them based on the
+        stored statistics."""
         return [self.handle_data(xs, ys) for xs, ys in meta_tuples]
 
 
@@ -93,6 +103,7 @@ def normalize_predict(predict_fn):
     Note: when applying this decorator to a method, the resulting method is extended with the argument
         return_density, defaulting to the value True
     """
+
     def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
@@ -105,8 +116,10 @@ def normalize_predict(predict_fn):
             y_std = jnp.ones_like(self._normalizer.y_std)
 
         if return_full_covariance and not return_density:
-            warnings.warn("You want the full covariance but only asked for mean and std of individual " +
-                          "points... return_density ignored")
+            warnings.warn(
+                "You want the full covariance but only asked for mean and std of individual "
+                + "points... return_density ignored"
+            )
             warnings.warn("There is probably a smarter thing to do here")
             return_full_covariance = False
 
@@ -122,7 +135,8 @@ def normalize_predict(predict_fn):
 
             if return_full_covariance:
                 raise ValueError(
-                    "Cannot return full covariance if the base learner does not return full covariance. Please debug")
+                    "Cannot return full covariance if the base learner does not return full covariance. Please debug"
+                )
 
             if return_density:
                 return transformed
@@ -130,8 +144,10 @@ def normalize_predict(predict_fn):
                 return new_loc, new_scale
 
         elif isinstance(pred_dist, MultivariateNormal):
-            assert self.flatten_ys, "Multivariate normals with multidimensional outputs are not supported (yet?)"
-            new_cov = pred_dist.covariance_matrix * y_std ** 2
+            assert (
+                self.flatten_ys
+            ), "Multivariate normals with multidimensional outputs are not supported (yet?)"
+            new_cov = pred_dist.covariance_matrix * y_std**2
             transformed = MultivariateNormal(loc=new_loc, covariance_matrix=new_cov)
 
             if return_full_covariance:
@@ -144,7 +160,9 @@ def normalize_predict(predict_fn):
             else:
                 return new_loc, diag_std
         else:
-            raise NotImplementedError("This posterior distribution is not supported: " + str(pred_dist.__class__))
+            raise NotImplementedError(
+                "This posterior distribution is not supported: " + str(pred_dist.__class__)
+            )
 
     return normalized_predict
 
@@ -155,7 +173,7 @@ def _meta_collate_fn(batch, task_bs, ds_bs):
 
 
 def _flatten_index(task, data_pt, max_len):
-    return task*max_len + data_pt
+    return task * max_len + data_pt
 
 
 def _unflatten_index(index, max_len):
@@ -167,6 +185,7 @@ class MetaDataset(torch_data.Dataset):
     A dataset that will allow batching over both the task and dataset level.
         torch.data.Datasets are indexable. In our case, this means transforming a
     """
+
     def __init__(self, meta_tuples):
         self.meta_tuples = meta_tuples
         self.len_per_task = [xs.shape[0] for xs, ys in meta_tuples]
@@ -183,7 +202,9 @@ class MetaDataset(torch_data.Dataset):
 
 
 class MetaBatchSamplerWithReplacement(Sampler):
-    def __init__(self, dataset, task_batch_size, dataset_batch_size, total_iterations=None, random_state=None):
+    def __init__(
+        self, dataset, task_batch_size, dataset_batch_size, total_iterations=None, random_state=None
+    ):
         """
         :param dataset: A dataset of meta_train_tuples
         :param task_batch_size: The number of tasks in a batch
@@ -200,16 +221,22 @@ class MetaBatchSamplerWithReplacement(Sampler):
 
     def __iter__(self):
         for _ in range(self.total_iterations):
-            self.rds, choice_key, *dataset_keys = jax.random.split(self.rds, 2+self.task_batch_size)
-            batch_indices = jax.random.choice(choice_key, self.dataset.num_tasks, shape=(self.task_batch_size,))
+            self.rds, choice_key, *dataset_keys = jax.random.split(self.rds, 2 + self.task_batch_size)
+            batch_indices = jax.random.choice(
+                choice_key, self.dataset.num_tasks, shape=(self.task_batch_size,)
+            )
             indices_list = []
             for i, task in enumerate(batch_indices):
                 # get data-points for one of the chosen task
-                task_indices = jax.random.choice(dataset_keys[i],
-                                                 self.dataset.len_per_task[task],
-                                                 shape=(self.dataset_batch_size,))
+                task_indices = jax.random.choice(
+                    dataset_keys[i],
+                    self.dataset.len_per_task[task],
+                    shape=(self.dataset_batch_size,),
+                )
 
-                indices_list.append([_flatten_index(task, point, self.dataset.max_len) for point in task_indices])
+                indices_list.append(
+                    [_flatten_index(task, point, self.dataset.max_len) for point in task_indices]
+                )
 
             yield [point for sublist in indices_list for point in sublist]
 
@@ -218,10 +245,11 @@ class MetaBatchSamplerWithReplacement(Sampler):
 
 
 class MetaDataLoaderTwoLevel(torch_data.DataLoader):
-    """ A dataloader that provides batching over both the task and the dataset.
-        Notes:
-            A batch consists of a tuple of two three dimensional arrays
+    """A dataloader that provides batching over both the task and the dataset.
+    Notes:
+        A batch consists of a tuple of two three dimensional arrays
     """
+
     def __init__(self, meta_tuples, task_batch_size, dataset_batch_size, iterations):
         """
         :param meta_tuples: The meta tuples given a list of tuples of jax.numpy.ndarrays
@@ -230,27 +258,32 @@ class MetaDataLoaderTwoLevel(torch_data.DataLoader):
         :param iterations: The number of batches to deliver. Should correspond to the num_iter of the train loop
         """
         dataset = MetaDataset(meta_tuples)
-        meta_batch_sampler = MetaBatchSamplerWithReplacement(dataset, task_batch_size,
-                                                             dataset_batch_size, total_iterations=iterations)
+        meta_batch_sampler = MetaBatchSamplerWithReplacement(
+            dataset, task_batch_size, dataset_batch_size, total_iterations=iterations
+        )
 
-        super().__init__(dataset,
-                         batch_sampler=meta_batch_sampler,
-                         collate_fn=functools.partial(_meta_collate_fn,
-                                                      task_bs=task_batch_size, ds_bs=dataset_batch_size))
+        super().__init__(
+            dataset,
+            batch_sampler=meta_batch_sampler,
+            collate_fn=functools.partial(_meta_collate_fn, task_bs=task_batch_size, ds_bs=dataset_batch_size),
+        )
 
 
 class MetaDataLoaderOneLevel(torch_data.DataLoader):
-    """ A dataloader that implements one way batching, namely at the task level.
-        Notes:
-            A batch consists of two lists of full datasets
+    """A dataloader that implements one way batching, namely at the task level.
+    Notes:
+        A batch consists of two lists of full datasets
     """
+
     def __init__(self, meta_tuples, task_batch_size, iterations):
         """
         :param meta_tuples: The meta tuples given a list of tuples of jax.numpy.ndarrays
         :param task_batch_size: The number of tasks in a batch
         :param iterations: The number of batches to deliver. Should correspond to the num_iter of the train loop
         """
-        sampler = torch_data.RandomSampler(meta_tuples, replacement=True, num_samples=iterations*task_batch_size)
+        sampler = torch_data.RandomSampler(
+            meta_tuples, replacement=True, num_samples=iterations * task_batch_size
+        )
 
         def unzip_collate(batch):
             # batch is a list of tuples of arrays
@@ -262,7 +295,44 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
         super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=unzip_collate)
 
 
-def handle_batch_input_dimensionality(xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = False):
+class SimpleDataset(torch_data.Dataset):
+    def __init__(self, xs, ys):
+        self.xs = xs
+        self.ys = ys
+
+    def __getitem__(self, item):
+        return self.xs[item], self.ys[item]
+
+    def __len__(self):
+        return self.xs.shape[0]
+
+
+class DataLoaderNumpy(torch_data.DataLoader):
+    """Dataloader for the BNN train loops."""
+
+    def __init__(self, xs, ys, batch_size, iterations):
+        """
+        :param xs: Train features
+        :param ys: Train labels
+        :param batch_size: The number of points in a batch
+        :param iterations: The number of batches to deliver. Should correspond to the num_iter of the train loop
+        """
+        dataset = SimpleDataset(xs, ys)
+        sampler = torch_data.RandomSampler(dataset, replacement=True, num_samples=iterations * batch_size)
+
+        def numpy_collate(batch):
+            # batch is a list of tuples of arrays
+            # want: a tuple of lists of arrays
+            xs_list = [xs for xs, _ in batch]
+            ys_list = [ys for _, ys in batch]
+            return np.stack(xs_list, 0), np.stack(ys_list, 0)
+
+        super().__init__(dataset, batch_size=batch_size, collate_fn=numpy_collate, sampler=sampler)
+
+
+def handle_batch_input_dimensionality(
+    xs: np.ndarray, ys: Optional[np.ndarray] = None, flatten_ys: bool = False
+):
     """
     Takes a dataset S=(xs,ys) and returns it in desired shape whenever possible. Returned values are as follows:
     xs shall have shape (num_points, input_dim) and

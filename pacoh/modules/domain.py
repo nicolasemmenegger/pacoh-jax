@@ -53,6 +53,7 @@ class ContinuousDomain:
         # use random initial point
         # return np.random.uniform(low=self.l, high=self.u, size=(1, self.d))
 
+
 class DiscreteDomain:
     def __init__(self, points, d=None):
         if points.ndim == 1:

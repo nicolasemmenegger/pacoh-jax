@@ -4,8 +4,10 @@ from numpyro.distributions import Independent, Normal
 
 
 def calib_error(pred_dist_diagonalized, test_ys):
-    """ Both inputs should be 2 dimensional. """
-    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(pred_dist_diagonalized.base_dist, Normal):
+    """Both inputs should be 2 dimensional."""
+    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(
+        pred_dist_diagonalized.base_dist, Normal
+    ):
         raise ValueError("Wrong argument type")
 
     cdf_vals = pred_dist_diagonalized.base_dist.cdf(test_ys)
@@ -21,16 +23,18 @@ def calib_error(pred_dist_diagonalized, test_ys):
     # emp_freq_per_confidence_level[quantile] The probability that the model predicts a probability lower than the qth quantile
     # under the empirical distribution
 
-    calib_rmse = np.sqrt(np.mean((emp_freq_per_conf_level - conf_levels)**2))
+    calib_rmse = np.sqrt(np.mean((emp_freq_per_conf_level - conf_levels) ** 2))
     return calib_rmse
 
 
 def calib_error_chi2(pred_dist_diagonalized, test_ys):
-    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(pred_dist_diagonalized.base_dist, Normal):
+    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(
+        pred_dist_diagonalized.base_dist, Normal
+    ):
         raise ValueError("Wrong argument type")
 
-    z2 = (((pred_dist_diagonalized.base_dist.mean - test_ys) / pred_dist_diagonalized.base_dist.scale) ** 2)
+    z2 = ((pred_dist_diagonalized.base_dist.mean - test_ys) / pred_dist_diagonalized.base_dist.scale) ** 2
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
     conf_levels = np.linspace(0.05, 1, 20)
     accs = np.array([f(p) for p in conf_levels])
-    return np.sqrt(np.mean((accs - conf_levels)**2))
+    return np.sqrt(np.mean((accs - conf_levels) ** 2))

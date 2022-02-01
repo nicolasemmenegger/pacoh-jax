@@ -1,13 +1,17 @@
 import warnings
 
 import numpyro
-from numpyro.distributions import Normal, TransformedDistribution, MultivariateNormal, Independent
+from numpyro.distributions import (
+    Normal,
+    TransformedDistribution,
+    MultivariateNormal,
+    Independent,
+)
 from numpyro.distributions.transforms import AffineTransform
 import numpy as np
 from jax import numpy as jnp
 import haiku as hk
 from jax.scipy.linalg import cho_solve, cho_factor
-
 
 from pacoh.modules.common import PositiveParameter
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME
@@ -40,7 +44,7 @@ class AffineTransformedDistribution(TransformedDistribution):
         if hasattr(self.base_dist, "scale"):
             return np.exp(np.log(self.base_dist.scale) + np.log(self.norm_scale))
         elif hasattr(self.base_dist, "variance"):
-            return np.exp(0.5*np.log(self.base_dist.variance) + np.log(self.norm_scale))
+            return np.exp(0.5 * np.log(self.base_dist.variance) + np.log(self.norm_scale))
         elif hasattr(self.base_dist, "stddev"):
             return np.exp(np.log(self.base_dist.stddev) + np.log(self.norm_scale))
 
@@ -54,36 +58,42 @@ class AffineTransformedDistribution(TransformedDistribution):
 
 
 class JAXGaussianLikelihood(hk.Module):
-    def __init__(self, variance: float = 1.0, variance_constraint_gt=0.0, output_dim=1, learn_likelihood=True):
+    def __init__(
+        self,
+        variance: float = 1.0,
+        variance_constraint_gt=0.0,
+        output_dim=1,
+        learn_likelihood=True,
+    ):
         super().__init__(LIKELIHOOD_MODULE_NAME)
-        variance = jnp.ones((output_dim,))*variance
+        variance = jnp.ones((output_dim,)) * variance
         if learn_likelihood:
             self.variance = PositiveParameter(variance, boundary_value=variance_constraint_gt)
         else:
             self.variance = lambda: variance
 
     def __call__(self, posterior):
-        d = posterior.loc.shape[0]
         if isinstance(posterior, numpyro.distributions.MultivariateNormal):
+            d = posterior.loc.shape[0]
             cov_with_noise = posterior.covariance_matrix + jnp.eye(d, d) * self.variance()
-            return numpyro.distributions.MultivariateNormal(loc=posterior.loc, covariance_matrix=cov_with_noise)
+            return numpyro.distributions.MultivariateNormal(
+                loc=posterior.loc, covariance_matrix=cov_with_noise
+            )
         elif isinstance(posterior, numpyro.distributions.Independent):
             scale = jnp.sqrt(posterior.variance + self.variance())
-            return get_diagonal_gaussian(posterior.loc, scale)
+            return get_diagonal_gaussian(posterior.base_dist.loc, scale)
         else:
             raise ValueError("posterior should be either a multivariate diagonal or full covariance gaussian")
 
-    # def log_prob(self, ys_true, ys_pred):
-    #     scale = jnp.sqrt(self.variance())
-    #     logprob = Normal(scale=scale).log_prob(ys_true - ys_pred)  # log likelihood of the data under the modeled variance
-    #     return logprob
+    def log_prob(self, ys_true, ys_pred):
+        gauss = get_diagonal_gaussian(jnp.zeros_like(ys_true), jnp.sqrt(self.variance()) * jnp.ones_like(ys_true))
+        return gauss.log_prob(ys_pred)
 
-    def get_posterior_from_means(self, loc):
-        raise NotImplementedError("I think this should be redone")
-        batch_size = loc.shape[0]
-        var = self.variance()
-        stds = jnp.broadcast_to(jnp.sqrt(var), (batch_size, *var.shape))
-        return Normal(loc, scale=stds)
+    # def get_posterior_from_means(self, loc):
+    #     batch_size = loc.shape[0]
+    #     var = self.variance()
+    #     stds = jnp.broadcast_to(jnp.sqrt(var), (batch_size, *var.shape))
+    #     return get_diagonal_gaussian(loc, stds)
 
 
 def get_mixture(pred_dists, n):
@@ -106,7 +116,7 @@ def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> flo
     bilin = locdiff @ cho_solve(d2chol, locdiff)
 
     kl = logdets - dist1.loc.shape[0] + trace + bilin
-    return 0.5*kl
+    return 0.5 * kl
 
 
 def diagonalize_gaussian(dist):

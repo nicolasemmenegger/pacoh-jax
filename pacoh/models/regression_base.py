@@ -1,22 +1,32 @@
-import sys
 from typing import Dict
 
 import numpy as np
 import jax
 from jax import numpy as jnp
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 
 from tqdm import trange
 
 from pacoh.modules.distributions import diagonalize_gaussian
-from pacoh.util.data_handling import handle_batch_input_dimensionality, Sampler, DataNormalizer
+from pacoh.util.data_handling import (
+    handle_batch_input_dimensionality,
+    DataNormalizer,
+    DataLoaderNumpy,
+)
 from pacoh.util.evaluation import calib_error, calib_error_chi2
 from pacoh.util.abstract_attributes import AbstractAttributesABCMeta, abstractattribute
 
 
 class RegressionModel(metaclass=AbstractAttributesABCMeta):
-    def __init__(self, input_dim: int, output_dim: int, normalize_data: bool = True,
-                 normalizer: DataNormalizer = None, flatten_ys: bool = False, random_state: jax.random.PRNGKey = None):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        normalize_data: bool = True,
+        normalizer: DataNormalizer = None,
+        flatten_ys: bool = False,
+        random_state: jax.random.PRNGKey = None,
+    ):
         """
         Abstracts the boilerplate functionality of a Regression Model. This includes data normalization,
         fitting and inference
@@ -53,8 +63,12 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         else:
             self._normalizer = normalizer
             assert normalizer.flatten_ys == flatten_ys, "instructions unclear, flatten_ys"
-            assert normalizer.turn_off_normalization == (not normalize_data), "instructions unclear, normalize"
-            assert output_dim == normalizer.output_dim and input_dim == normalizer.input_dim, """Dimensions not matching"""
+            assert normalizer.turn_off_normalization == (
+                not normalize_data
+            ), "instructions unclear, normalize"
+            assert (
+                output_dim == normalizer.output_dim and input_dim == normalizer.input_dim
+            ), """Dimensions not matching"""
 
     def add_data_points(self, xs: np.ndarray, ys: np.ndarray, refit: bool = True):
         """
@@ -64,10 +78,6 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
             ys: the corresponding observations, of shape (num_data) or (num_data, 1)
             refit: whether to refit the posterior or not
         """
-        # xs, ys = handle_batch_input_dimensionality(xs, ys, flatten_ys=False)
-        # assert xs.ndim == 2 and xs.shape[1] == self._input_dim, "Something is wrong with your data"
-        # assert ys.ndim == 2 and ys.shape[1] == self._output_dim, "Something is wrong with your data"
-        # handle input dimensionality and normalize data
         xs, ys = self._normalizer.handle_data(xs, ys)
 
         # concatenate to new datapoints
@@ -97,10 +107,11 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         Computes the average test log likelihood and the rmse on test data
 
         Args:
-            test_x: (ndarray) test input data of shape (n_samples, ndim_x)
-            test_y: (ndarray) test target data of shape (n_samples, 1)
+            test_xs: (ndarray) test input data of shape (n_samples, ndim_x)
+            test_ys: (ndarray) test target data of shape (n_samples, 1)
+            pred_dist: numpyro.Distribution
 
-        Returns: (avg_log_likelihood, rmse)
+        Returns: a dictionary with keys 'avg. ll' 'rmse' 'calib err.' & 'calib err. chi2'
 
         """
         test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys, flatten_ys=self.flatten_ys)
@@ -112,44 +123,56 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         calibr_error = calib_error(diagonalize_gaussian(pred_dist), test_ys)
         calibr_error_chi2 = calib_error_chi2(diagonalize_gaussian(pred_dist), test_ys)
         return {
-            'avg. ll': avg_log_likelihood.item(),
-            'rmse': rmse.item(),
-            'calib err.': calibr_error.item(),
-            'calib err. chi2': calibr_error_chi2
+            "avg. ll": avg_log_likelihood.item(),
+            "rmse": rmse.item(),
+            "calib err.": calibr_error.item(),
+            "calib err. chi2": calibr_error_chi2,
         }
 
     def confidence_intervals(self, test_x, confidence=0.9):
         pred_dist = self.predict(test_x, return_density=True, return_full_covariance=False)
         alpha = (1 - confidence) / 2
-        ucb = pred_dist.base_dist.icdf((1 - alpha)*jnp.ones(pred_dist.event_shape))
-        lcb = pred_dist.base_dist.icdf(alpha*jnp.ones(pred_dist.event_shape))
+        ucb = pred_dist.base_dist.icdf((1 - alpha) * jnp.ones(pred_dist.event_shape))
+        lcb = pred_dist.base_dist.icdf(alpha * jnp.ones(pred_dist.event_shape))
         return lcb, ucb
 
     @abstractmethod
     def predict(self, test_x, return_density=False, **kwargs):
-        """Target predict. """
+        """Target predict."""
         pass
 
-    def fit(self, x_val=None, y_val=None, log_period=500, num_iter_fit=None):
-        """ Default train loop, to be overwritten if custom behaviour is needed (e.g. for exact gp inference). """
-        train_batch_sampler = self._get_batch_sampler(self._xs_data, self._ys_data, self._batch_size)
+    def fit(self, xs_val=None, ys_val=None, log_period=500, num_iter_fit=None):
+        """Default train loop, to be overwritten if custom behaviour is needed (e.g. for exact gp inference)."""
+        dataloader = self._get_dataloader(
+            self._xs_data,
+            self._ys_data,
+            self._batch_size,
+            iterations=num_iter_fit
+        )
+
+        if xs_val is not None:
+            assert ys_val is not None, "please specify both xs_val and ys_val"
+            xs_val, ys_val = self._normalizer.handle_data(xs_val, ys_val)
+
+
+        p_bar = trange(num_iter_fit)
         loss_list = []
-        pbar = trange(num_iter_fit)
-        for i in pbar:
-            x_batch, y_batch = next(train_batch_sampler)
-            loss = self._step(x_batch, y_batch)
-            loss_list.append(loss)
+        for i, batch in zip(p_bar, dataloader):
+            xs_batch, ys_batch = batch
+            curr_loss = self._step(xs_batch, ys_batch)
+            loss_list.append(curr_loss)
 
             if i % log_period == 0:
-                loss = jnp.mean(jnp.array(loss_list))
+                period_loss = jnp.mean(jnp.array(loss_list))
                 loss_list = []
-                message = dict(loss=loss)
-                if x_val is not None and y_val is not None:
-                    metric_dict = self.eval(x_val, y_val)
+                message = dict(loss=period_loss)
+                if xs_val is not None and ys_val is not None:
+                    metric_dict = self.eval(xs_val, ys_val)
                     message.update(metric_dict)
-                pbar.set_postfix(message)
+                p_bar.set_postfix(message)
 
     """ ----- Private attributes ----- """
+
     @abstractattribute
     def _input_dim(self) -> int:
         ...
@@ -179,6 +202,7 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         ...
 
     """ ----- Private methods ----- """
+
     @abstractmethod
     def _recompute_posterior(self):
         """
@@ -189,9 +213,9 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         pass
 
     def _step(self, xs_batch, ys_batch):
-        """ One step of the train loop
-            Note:
-                this is not an abstract method because some modules may choose to not implement it.
+        """One step of the train loop
+        Note:
+            this is not an abstract method because some modules may choose to not implement it.
         """
         raise NotImplementedError("This module does not implement the ._step method")
 
@@ -207,27 +231,17 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         self._num_train_points = 0
         self._recompute_posterior()
 
-    def _get_batch_sampler(self, xs, ys, batch_size, shuffle=True):
+    def _get_dataloader(self, xs, ys, batch_size, iterations=2000) -> DataLoaderNumpy:
         """
         Returns an iterator to be used to sample minibatches from the dataset in the train loop
-        :param xs: The feature vectors
-        :param ys: The labels
-        :param batch_size: The size of the batches. If -1, will be the whole data set
-        :param shuffle: If this is true, we initially shuffle the data, and then iterate
-                        If it is false, we subsample each time the iterator gets queried
-        :return: a Sampler object (which is itself an iterator)
+        :param xs, ys: the data set
+        :param batch_size: num of points per iteration. -1 means no batching
+        :param iterations: length of train loop with this dataloader
+        :param batch_size: number of data point per task
         """
-        # iterator that shuffles and repeats the data
-        xs, ys = handle_batch_input_dimensionality(xs, ys)
-        num_train_points = xs.shape[0]
+        self._rng, sampler_key = jax.random.split(self._rng)
 
         if batch_size == -1:
-            batch_size = num_train_points
-        elif batch_size > 0:
-            pass
-        else:
-            raise AssertionError('batch size must be either positive or -1')
+            batch_size = xs.shape[0]  # just use the whole dataset
 
-        self._rng, sampler_key = jax.random.split(self._rng)
-        return Sampler(xs, ys, batch_size, sampler_key, shuffle)
-
+        return DataLoaderNumpy(xs, ys, batch_size, iterations)

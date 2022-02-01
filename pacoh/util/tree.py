@@ -8,8 +8,7 @@ from pacoh.util.typing import Tree
 
 
 def pytrees_stack(pytrees: Collection[Tree], axis=0):
-    results = jax.tree_multimap(
-        lambda *values: jnp.stack(values, axis=axis), *pytrees)
+    results = jax.tree_multimap(lambda *values: jnp.stack(values, axis=axis), *pytrees)
     return results
 
 
@@ -29,11 +28,11 @@ def pytree_shape(tree: Tree):
 
 
 def pytree_sum(tree: Tree):
-    return jax.tree_util.tree_reduce(lambda x, s: x+s, tree, 0.0)
+    return jax.tree_util.tree_reduce(lambda x, s: x + s, tree, 0.0)
 
 
 def stack_distributions(distribution: numpyro.distributions.Normal):
-    """ Takes a Normal Distribution with batch_shape (n_particles, *dims) and returns one of (*dims, n_particles) """
+    """Takes a Normal Distribution with batch_shape (n_particles, *dims) and returns one of (*dims, n_particles)"""
     loc = distribution.loc
     scale = distribution.scale
 

@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def get_simple_sinusoid_dataset():
     n_train = 50
     x_train = np.random.uniform(-4, 4, size=(n_train, 1))

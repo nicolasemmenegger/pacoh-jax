@@ -19,24 +19,25 @@ from pacoh.util.initialization import initialize_batched_model
 
 
 class BayesianNeuralNetworkSVGD(RegressionModel):
-
-    def __init__(self,
-                 input_dim: int,
-                 output_dim: int,
-                 normalize_data: bool = True,
-                 normalizer: DataNormalizer = None,
-                 random_state: jax.random.PRNGKey = None,
-                 hidden_layer_sizes=(32, 32),
-                 activation: Callable = jax.nn.elu,
-                 learn_likelihood: bool = True,
-                 prior_std: float = 1.0,
-                 prior_weight: float = 0.1,
-                 likelihood_prior_mean: float = jnp.log(0.1),
-                 likelihood_prior_std: float = 1.0,
-                 n_particles: int = 10,
-                 batch_size: int = 8,
-                 bandwidth: float = 100.,
-                 lr: float = 1e-3):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        normalize_data: bool = True,
+        normalizer: DataNormalizer = None,
+        random_state: jax.random.PRNGKey = None,
+        hidden_layer_sizes=(32, 32),
+        activation: Callable = jax.nn.elu,
+        learn_likelihood: bool = True,
+        prior_std: float = 1.0,
+        prior_weight: float = 0.1,
+        likelihood_prior_mean: float = jnp.log(0.1),
+        likelihood_prior_std: float = 1.0,
+        n_particles: int = 10,
+        batch_size: int = 8,
+        bandwidth: float = 100.0,
+        lr: float = 1e-3,
+    ):
         # TODO what is sqrt_mode, meta_learned_prior_mode
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
         self.batch_size = batch_size
@@ -45,9 +46,13 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         # a) Get batched forward functions for the nn and likelihood (note that learn_likelihood controls whether the
         #    likelihood module actually contributes parameters
         self._rng, init_key = jax.random.split(self._rng)
-        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(output_dim, hidden_layer_sizes,
-                                                                           activation, likelihood_prior_mean,
-                                                                           learn_likelihood)
+        init, self.apply, self.apply_broadcast = construct_bnn_forward_fns(
+            output_dim,
+            hidden_layer_sizes,
+            activation,
+            likelihood_prior_mean,
+            learn_likelihood,
+        )
 
         # b) Initialize the prior and the particles of the posterior
         params, template = initialize_batched_model(init, n_particles, init_key, (batch_size, input_dim))
@@ -82,12 +87,13 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
             # and not with the logscale transforms used to ensure positivity
             return pytree_rbf_set(particles, particles, bandwidth, 1.0)
 
-
         # d) learning rate scheduler
         lr_scheduler = optax.constant_schedule(lr)
         self.optimizer = optax.adam(lr_scheduler)
         self.optimizer_state = self.optimizer.init(self.particles)
-        log_prob = functools.partial(target_post_prob_batched, apply=self.apply, apply_bdcst=self.apply_broadcast)
+        log_prob = functools.partial(
+            target_post_prob_batched, apply=self.apply, apply_bdcst=self.apply_broadcast
+        )
         self.svgd = SVGD(log_prob, kernel_fwd, self.optimizer, self.optimizer_state)
 
     def _recompute_posterior(self):
@@ -105,7 +111,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         return 0.0  # here I could return the log likelihood somehow
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     np.random.seed(1)
 
     d = 1  # dimensionality of the data
@@ -120,8 +126,14 @@ if __name__ == '__main__':
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
-    nn = BayesianNeuralNetworkSVGD(input_dim=d, output_dim=1, hidden_layer_sizes=(32, 32), prior_weight=0.001,
-                                   bandwidth=1000.0, learn_likelihood=True)
+    nn = BayesianNeuralNetworkSVGD(
+        input_dim=d,
+        output_dim=1,
+        hidden_layer_sizes=(32, 32),
+        prior_weight=0.001,
+        bandwidth=1000.0,
+        learn_likelihood=True,
+    )
 
     nn.add_data_points(x_train, y_train)
 

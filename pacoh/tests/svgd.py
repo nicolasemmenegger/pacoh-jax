@@ -20,7 +20,11 @@ class TreeTestCase(unittest.TestCase):
 
     @staticmethod
     def tree_assert_all_close(first: Tree, second: Tree) -> None:
-        jax.tree_multimap(lambda p, other: np.testing.assert_allclose(p, other, rtol=1e-3), first, second)
+        jax.tree_multimap(
+            lambda p, other: np.testing.assert_allclose(p, other, rtol=1e-3),
+            first,
+            second,
+        )
 
 
 class SVGDTest(TreeTestCase):
@@ -30,8 +34,15 @@ class SVGDTest(TreeTestCase):
         self.kernel_bandwidth = 1000.0
         self.n = 10
 
-        nn = BayesianNeuralNetworkSVGD(input_dim=1, output_dim=1, hidden_layer_sizes=(32, 32), prior_weight=0.001,
-                                       bandwidth=self.kernel_bandwidth, learn_likelihood=True, n_particles=self.n)
+        nn = BayesianNeuralNetworkSVGD(
+            input_dim=1,
+            output_dim=1,
+            hidden_layer_sizes=(32, 32),
+            prior_weight=0.001,
+            bandwidth=self.kernel_bandwidth,
+            learn_likelihood=True,
+            n_particles=self.n,
+        )
 
         # construct a svgd object for the nn case
         self.svgd = nn.svgd
@@ -51,30 +62,37 @@ class SVGDTest(TreeTestCase):
     def test_phi_function(self):
         data = self.xs[:8], self.ys[:8]
         test_update = self.svgd.neg_phi_update(self.particles, *data)
+
         # the above is a vmapped, and jitted, pytree compatible version
         # now compare this to a slower, but easier to understand version corresponding to the pseudocode in the paper
 
-        def log_prob_distributed(particle, rng, *data): # kind of a hack because we only have access to the batched version...
+        def log_prob_distributed(
+            particle, rng, *data
+        ):  # kind of a hack because we only have access to the batched version...
             return self.svgd.target_log_prob_batched(broadcast_params(particle, self.n), rng, *data)
 
-
         unstacked_particles = pytree_unstack(self.particles)
-        log_qs_fns = [jax.grad(lambda particle, *args: jnp.reshape(log_prob_distributed(particle, *args)[i], ())) for i in range(self.n)]
+        log_qs_fns = [
+            jax.grad(lambda particle, *args: jnp.reshape(log_prob_distributed(particle, *args)[i], ()))
+            for i in range(self.n)
+        ]
         scores = [logq(unstacked_particles[i], None, *data) for i, logq in enumerate(log_qs_fns)]
         K = self.svgd.get_kernel_matrix(self.particles)
         updates = []
-        kernel_grad_fns = [jax.grad(lambda tree: pytree_rbf(tree, unstacked_particles[i])) for i in range(self.n)]
+        kernel_grad_fns = [
+            jax.grad(lambda tree: pytree_rbf(tree, unstacked_particles[i])) for i in range(self.n)
+        ]
         for k in range(self.n):
             update_k = None
             for kp in range(self.n):
                 kernel_val = K[kp, k]
-                first_term = jax.tree_map(lambda p: p*kernel_val, scores[kp])
+                first_term = jax.tree_map(lambda p: p * kernel_val, scores[kp])
                 second_term = kernel_grad_fns[k](unstacked_particles[kp])
-                together = jax.tree_multimap(lambda p, o: -1.0/self.n*(p+o), first_term, second_term)
+                together = jax.tree_multimap(lambda p, o: -1.0 / self.n * (p + o), first_term, second_term)
                 if update_k is None:
                     update_k = together
                 else:
-                    update_k = jax.tree_multimap(lambda a,b: a+b, update_k, together)
+                    update_k = jax.tree_multimap(lambda a, b: a + b, update_k, together)
 
             updates.append(update_k)
 
@@ -83,14 +101,21 @@ class SVGDTest(TreeTestCase):
             self.tree_assert_all_close(updates[k], unstacked_updates[k])
 
     def test_pytree_rbf(self):
-        """ Tests whether the pytree and vmap based implementation of the kernel matrix for svgd is working. """
-        pytree_res = pytree_rbf_set(self.particles, self.particles, 1., 1.)
+        """Tests whether the pytree and vmap based implementation of the kernel matrix for svgd is working."""
+        pytree_res = pytree_rbf_set(self.particles, self.particles, 1.0, 1.0)
         n = self.stacked_params.shape[0]
         for i in range(n):
             for j in range(n):
-                self.assertEqual(pytree_res[i, j],
-                                 rbf_cov(self.stacked_params[i], self.stacked_params[j], lambda: 1., lambda: 1.))
+                self.assertEqual(
+                    pytree_res[i, j],
+                    rbf_cov(
+                        self.stacked_params[i],
+                        self.stacked_params[j],
+                        lambda: 1.0,
+                        lambda: 1.0,
+                    ),
+                )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
