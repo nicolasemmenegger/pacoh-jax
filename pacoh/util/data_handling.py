@@ -4,12 +4,16 @@ import warnings
 import numpy as np
 from typing import Optional
 import jax
+import numpyro.distributions
 from jax import numpy as jnp
-from numpyro.distributions import Independent, MultivariateNormal, Normal
+from numpyro.distributions import Independent, MultivariateNormal, Normal, MixtureSameFamily
 from torch.utils import data as torch_data
 from torch.utils.data.sampler import Sampler
 
-from pacoh.modules.distributions import get_diagonal_gaussian
+from pacoh.modules.distributions import (
+    get_diagonal_gaussian_numpyro,
+    diagonalize_gaussian,
+)
 
 
 class DataNormalizer:
@@ -56,7 +60,10 @@ class DataNormalizer:
 
         normalizer = cls(input_dim, output_dim, normalize_data)
         normalizer.x_mean, normalizer.y_mean = jnp.mean(xs, axis=0), jnp.mean(ys, axis=0)
-        normalizer.x_std, normalizer.y_std = jnp.std(xs, axis=0) + 1e-8, jnp.std(ys, axis=0) + 1e-8
+        normalizer.x_std, normalizer.y_std = (
+            jnp.std(xs, axis=0) + 1e-8,
+            jnp.std(ys, axis=0) + 1e-8,
+        )
         normalizer.flatten_ys = flatten_ys
         return normalizer
 
@@ -65,6 +72,7 @@ class DataNormalizer:
         Normalizes the data according to the stored statistics and returns the normalized data.
         Assumes the data already has the correct dimensionality.
         """
+
         if self.turn_off_normalization:
             if ys is None:
                 return xs
@@ -95,6 +103,39 @@ class DataNormalizer:
         return [self.handle_data(xs, ys) for xs, ys in meta_tuples]
 
 
+def is_gaussian_dist(dist):
+    """Checks whether is a Gaussian distribution we support as public interface."""
+    return (isinstance(dist, Independent) and isinstance(dist.base_dist, Normal)) or isinstance(
+        dist, MultivariateNormal
+    )
+
+
+def normalize_gaussian_dist(pred_dist, normalizer):
+    """Normalizes a gaussian distribution"""
+    if not normalizer.turn_off_normalization:
+        y_mean = normalizer.y_mean
+        y_std = normalizer.y_std
+    else:
+        y_mean = jnp.zeros_like(normalizer.y_mean)
+        y_std = jnp.ones_like(normalizer.y_std)
+
+    new_loc = y_std * pred_dist.mean + y_mean
+
+    if isinstance(pred_dist, Independent):
+        new_scale = jnp.sqrt(pred_dist.variance) * y_std
+        transformed = get_diagonal_gaussian_numpyro(new_loc, new_scale, len(pred_dist.event_shape))
+    elif isinstance(pred_dist, MultivariateNormal):
+        assert (
+            normalizer.flatten_ys
+        ), "Multivariate normals with multidimensional outputs are not supported (yet?)"
+        new_cov = pred_dist.covariance_matrix * y_std**2
+        transformed = MultivariateNormal(loc=new_loc, covariance_matrix=new_cov)
+    else:
+        raise NotImplementedError("Not supported gaussian distribution: " + str(pred_dist))
+
+    return transformed
+
+
 def normalize_predict(predict_fn):
     """
     Decorator taking the predict method of a RegressionModule as input and outputs the same method
@@ -104,16 +145,24 @@ def normalize_predict(predict_fn):
         return_density, defaulting to the value True
     """
 
-    def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=True):
+    def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=False):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
 
-        if not self._normalizer.turn_off_normalization:
-            y_mean = self._normalizer.y_mean
-            y_std = self._normalizer.y_std
+        if is_gaussian_dist(pred_dist):
+            transformed = normalize_gaussian_dist(pred_dist, normalizer=self._normalizer)
+        elif isinstance(pred_dist, MixtureSameFamily):
+            assert is_gaussian_dist(pred_dist.component_distribution), "mixture compoenents must be gaussians"
+            transformed_components = normalize_gaussian_dist(
+                pred_dist.component_distribution, normalizer=self._normalizer
+            )
+            transformed = MixtureSameFamily(pred_dist.mixing_distribution, transformed_components)
         else:
-            y_mean = jnp.zeros_like(self._normalizer.y_mean)
-            y_std = jnp.ones_like(self._normalizer.y_std)
+            raise NotImplementedError(
+                "unsupported predictive distribution: "
+                + str(pred_dist)
+                + ". Supported types are Independent(Normal), MultivariateGaussian and MixtureSameFamily's thereof"
+            )
 
         if return_full_covariance and not return_density:
             warnings.warn(
@@ -123,46 +172,21 @@ def normalize_predict(predict_fn):
             warnings.warn("There is probably a smarter thing to do here")
             return_full_covariance = False
 
-        new_loc = y_std * pred_dist.loc + y_mean
-
-        # Different normalization procedure depending on the type of the underlying predictive distribution
-        if isinstance(pred_dist, Independent):
-            new_scale = jnp.sqrt(pred_dist.variance) * y_std
-            transformed = Normal(new_loc, new_scale)
-
-            assert transformed.variance.shape == pred_dist.variance.shape
-            assert transformed.mean.shape == pred_dist.mean.shape
-
-            if return_full_covariance:
-                raise ValueError(
-                    "Cannot return full covariance if the base learner does not return full covariance. Please debug"
-                )
-
-            if return_density:
-                return transformed
-            else:
-                return new_loc, new_scale
-
-        elif isinstance(pred_dist, MultivariateNormal):
-            assert (
-                self.flatten_ys
-            ), "Multivariate normals with multidimensional outputs are not supported (yet?)"
-            new_cov = pred_dist.covariance_matrix * y_std**2
-            transformed = MultivariateNormal(loc=new_loc, covariance_matrix=new_cov)
-
+        # handle full_covariance_stuff
+        if isinstance(pred_dist, MultivariateNormal):
             if return_full_covariance:
                 return transformed
-
-            diag_std = jnp.sqrt(jnp.diag(new_cov))
-            pass
-            if return_density:
-                return get_diagonal_gaussian(new_loc, diag_std)
             else:
-                return new_loc, diag_std
-        else:
-            raise NotImplementedError(
-                "This posterior distribution is not supported: " + str(pred_dist.__class__)
+                transformed = diagonalize_gaussian(transformed)
+        elif return_full_covariance and not isinstance(pred_dist, MultivariateNormal):
+            raise ValueError(
+                "Cannot return full covariance if the base learner does not return full covariance. Please debug"
             )
+
+        if return_density:
+            return transformed
+        else:
+            return transformed.mean, jnp.sqrt(transformed.variance)
 
     return normalized_predict
 
@@ -203,7 +227,12 @@ class MetaDataset(torch_data.Dataset):
 
 class MetaBatchSamplerWithReplacement(Sampler):
     def __init__(
-        self, dataset, task_batch_size, dataset_batch_size, total_iterations=None, random_state=None
+        self,
+        dataset,
+        task_batch_size,
+        dataset_batch_size,
+        total_iterations=None,
+        random_state=None,
     ):
         """
         :param dataset: A dataset of meta_train_tuples
@@ -292,7 +321,12 @@ class MetaDataLoaderOneLevel(torch_data.DataLoader):
             ys_list = [ys for _, ys in batch]
             return xs_list, ys_list
 
-        super().__init__(meta_tuples, batch_size=task_batch_size, sampler=sampler, collate_fn=unzip_collate)
+        super().__init__(
+            meta_tuples,
+            batch_size=task_batch_size,
+            sampler=sampler,
+            collate_fn=unzip_collate,
+        )
 
 
 class SimpleDataset(torch_data.Dataset):

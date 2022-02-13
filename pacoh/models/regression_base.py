@@ -124,8 +124,8 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         calibr_error_chi2 = calib_error_chi2(diagonalize_gaussian(pred_dist), test_ys)
         return {
             "avg. ll": avg_log_likelihood.item(),
-            "rmse": rmse.item(),
-            "calib err.": calibr_error.item(),
+            "rmse": rmse.item(),  # rmse.item(),
+            "calib err.": calibr_error,  # calibr_error.item(),
             "calib err. chi2": calibr_error_chi2,
         }
 
@@ -144,16 +144,12 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def fit(self, xs_val=None, ys_val=None, log_period=500, num_iter_fit=None):
         """Default train loop, to be overwritten if custom behaviour is needed (e.g. for exact gp inference)."""
         dataloader = self._get_dataloader(
-            self._xs_data,
-            self._ys_data,
-            self._batch_size,
-            iterations=num_iter_fit
+            self._xs_data, self._ys_data, self._batch_size, iterations=num_iter_fit
         )
 
         if xs_val is not None:
             assert ys_val is not None, "please specify both xs_val and ys_val"
             xs_val, ys_val = self._normalizer.handle_data(xs_val, ys_val)
-
 
         p_bar = trange(num_iter_fit)
         loss_list = []

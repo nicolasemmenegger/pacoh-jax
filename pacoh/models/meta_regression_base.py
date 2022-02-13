@@ -69,7 +69,13 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         # the other branch is handled in the superclass
         self.fitted = False
 
-    def meta_fit(self, meta_train_tuples, meta_valid_tuples=None, log_period=500, num_iter_fit=None):
+    def meta_fit(
+        self,
+        meta_train_tuples,
+        meta_valid_tuples=None,
+        log_period=500,
+        num_iter_fit=None,
+    ):
         """
         :param meta_train_tuples:
         :param meta_valid_tuples:

@@ -7,7 +7,7 @@ import numpy as np
 import optax
 import torch
 from jax import numpy as jnp
-from numpyro.distributions import Uniform, MultivariateNormal, Independent
+from numpyro.distributions import Uniform, MultivariateNormal
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
@@ -299,7 +299,7 @@ if __name__ == "__main__":
 
             # posterior prediction
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
-            pred_mean = pred_dist.loc
+            pred_mean = pred_dist.mean
             lcb, ucb = pacoh_map.confidence_intervals(x_plot)
 
             # plot data

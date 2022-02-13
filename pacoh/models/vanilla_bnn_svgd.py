@@ -10,7 +10,7 @@ from jax import numpy as jnp
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import get_mixture
-from pacoh.modules.kernels import pytree_rbf_set
+from pacoh.modules.kernels import pytree_rbf_set, get_pytree_rbf_fn
 from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
@@ -27,20 +27,19 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         normalizer: DataNormalizer = None,
         random_state: jax.random.PRNGKey = None,
         hidden_layer_sizes=(32, 32),
-        activation: Callable = jax.nn.elu,
+        activation: Callable = jax.nn.relu,
         learn_likelihood: bool = True,
-        prior_std: float = 1.0,
+        prior_std: float = 0.1,
         prior_weight: float = 0.1,
         likelihood_prior_mean: float = jnp.log(0.1),
-        likelihood_prior_std: float = 1.0,
+        likelihood_prior_std: float = 0.1,
         n_particles: int = 10,
         batch_size: int = 8,
         bandwidth: float = 100.0,
         lr: float = 1e-3,
     ):
-        # TODO what is sqrt_mode, meta_learned_prior_mode
         super().__init__(input_dim, output_dim, normalize_data, normalizer, random_state)
-        self.batch_size = batch_size
+        self._batch_size = batch_size
         self.n_particles = n_particles
 
         # a) Get batched forward functions for the nn and likelihood (note that learn_likelihood controls whether the
@@ -82,11 +81,6 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
 
             return prior_weight * prior_log_prob + avg_log_likelihood
 
-        def kernel_fwd(particles):
-            # TODO here we could actually transform the parameters in order to work with the canonical parametrization
-            # and not with the logscale transforms used to ensure positivity
-            return pytree_rbf_set(particles, particles, bandwidth, 1.0)
-
         # d) learning rate scheduler
         lr_scheduler = optax.constant_schedule(lr)
         self.optimizer = optax.adam(lr_scheduler)
@@ -94,7 +88,12 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         log_prob = functools.partial(
             target_post_prob_batched, apply=self.apply, apply_bdcst=self.apply_broadcast
         )
-        self.svgd = SVGD(log_prob, kernel_fwd, self.optimizer, self.optimizer_state)
+        self.svgd = SVGD(
+            log_prob,
+            get_pytree_rbf_fn(bandwidth, 1.0),
+            self.optimizer,
+            self.optimizer_state,
+        )
 
     def _recompute_posterior(self):
         pass
@@ -107,8 +106,8 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         return get_mixture(self.apply.pred_dist(self.particles, None, xs), self.n_particles)
 
     def _step(self, x_batch, y_batch):
-        self.particles = self.svgd.step(self.particles, x_batch, y_batch)
-        return 0.0  # here I could return the log likelihood somehow
+        neg_log_prob, self.particles = self.svgd.step(self.particles, x_batch, y_batch)
+        return neg_log_prob
 
 
 if __name__ == "__main__":
@@ -122,29 +121,31 @@ if __name__ == "__main__":
 
     n_val = 200
 
-    x_plot = np.linspace(-6, 6, num=n_val)
+    x_plot = np.linspace(-4, 4, num=n_val)
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
     nn = BayesianNeuralNetworkSVGD(
         input_dim=d,
         output_dim=1,
-        hidden_layer_sizes=(32, 32),
-        prior_weight=0.001,
+        hidden_layer_sizes=(64, 64, 64, 64),
+        prior_weight=0.1,
         bandwidth=1000.0,
         learn_likelihood=True,
+        n_particles=1,
+        batch_size=200,
     )
 
     nn.add_data_points(x_train, y_train)
 
     n_iter_fit = 100  # 2000
     for i in range(200):
-        nn.fit(log_period=10, num_iter_fit=n_iter_fit)
+        nn.fit(log_period=10, num_iter_fit=n_iter_fit, xs_val=x_plot, ys_val=y_val)
         from matplotlib import pyplot as plt
 
         pred = nn.predict(x_plot)
-        lcb, ucb = nn.confidence_intervals(x_plot)
-        plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
+        # lcb, ucb = nn.confidence_intervals(x_plot)
+        # plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
         plt.plot(x_plot, pred.mean)
         plt.scatter(x_train, y_train)
 

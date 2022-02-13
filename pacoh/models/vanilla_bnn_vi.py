@@ -10,8 +10,12 @@ from jax import numpy as jnp
 from pacoh.models.regression_base import RegressionModel
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
-from pacoh.modules.distributions import get_mixture
-from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
+from pacoh.modules.distributions import get_mixture, VmappableIndependent
+from pacoh.util.constants import (
+    LIKELIHOOD_MODULE_NAME,
+    MLP_MODULE_NAME,
+    POSITIVE_PARAMETER_NAME,
+)
 from pacoh.util.initialization import initialize_batched_model
 from pacoh.util.tree import Tree
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
@@ -76,13 +80,13 @@ class BayesianNeuralNetworkVI(RegressionModel):
         hidden_layer_sizes=(32, 32),
         activation: Callable = jax.nn.elu,
         learn_likelihood: bool = True,
-        prior_std: float = 1.0,
+        prior_std: float = 0.1,
         prior_weight: float = 0.1,
-        likelihood_prior_mean: float = jnp.log(0.1),
-        likelihood_prior_std: float = 1.0,
+        likelihood_prior_mean: float = 0.1,
+        likelihood_prior_std: float = 0.0,
         batch_size_vi: int = 10,
         batch_size: int = 8,
-        lr: float = 1e-3,
+        lr: float = 1e-2,
     ):
         """
         :param input_dim: The dimension of a data point
@@ -100,7 +104,14 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param batch_size: The number of data points you get while training and predicting
         :param lr: The learning rate to use with the ELBO gradients
         """
-        super().__init__(input_dim, output_dim, normalize_data, normalizer, flatten_ys=False, random_state=random_state)
+        super().__init__(
+            input_dim,
+            output_dim,
+            normalize_data,
+            normalizer,
+            flatten_ys=False,
+            random_state=random_state,
+        )
         self._batch_size = batch_size
         self.batch_size_vi = batch_size_vi
 
@@ -117,9 +128,10 @@ class BayesianNeuralNetworkVI(RegressionModel):
         # b) Initialize the prior and posterior
         params, template = initialize_batched_model(init, batch_size_vi, init_key, (batch_size, input_dim))
 
-        def mean_std_map(mod_name: str, _: str, __: jnp.array):
+        def mean_std_map(mod_name: str, name: str, __: jnp.array):
+            transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
             if LIKELIHOOD_MODULE_NAME in mod_name:
-                return likelihood_prior_mean, likelihood_prior_std
+                return transform(likelihood_prior_mean, name), likelihood_prior_std
             elif MLP_MODULE_NAME in mod_name:
                 return 0.0, prior_std
             else:
@@ -154,11 +166,12 @@ class BayesianNeuralNetworkVI(RegressionModel):
         super().fit(xs_val, ys_val, log_period, num_iter_fit)
 
     @normalize_predict
-    def predict(self, xs, num_posterior_samples=20):
+    def predict(self, xs, num_posterior_samples=1):
         self._rng, key = jax.random.split(self._rng)
         nn_params = GaussianBelief.rsample(self.posterior, key, num_posterior_samples)
-        batched_pred_dists = self.pred_dist_apply(nn_params, None, xs)
-        return get_mixture(batched_pred_dists, num_posterior_samples)
+        preds = self.pred_dist_apply(nn_params, None, xs)
+        ret = get_mixture(preds, num_posterior_samples)
+        return ret
 
     def _step(self, x_batch, y_batch):
         self._rng, step_key = jax.random.split(self._rng)
@@ -176,7 +189,12 @@ class BayesianNeuralNetworkVI(RegressionModel):
 
 
 if __name__ == "__main__":
+    pass
     np.random.seed(1)
+    from jax.config import config
+
+    config.update("jax_debug_nans", False)
+    config.update("jax_disable_jit", False)
 
     d = 1  # dimensionality of the data
 
@@ -193,10 +211,10 @@ if __name__ == "__main__":
     nn = BayesianNeuralNetworkVI(
         input_dim=d,
         output_dim=1,
-        batch_size_vi=10,
+        batch_size_vi=1,
         hidden_layer_sizes=(32, 32),
-        prior_weight=0.001,
-        learn_likelihood=True,
+        prior_weight=0.0,
+        learn_likelihood=False,
     )
     nn.add_data_points(x_train, y_train)
 
@@ -212,3 +230,20 @@ if __name__ == "__main__":
         plt.scatter(x_train, y_train)
 
         plt.show()
+
+    # https://github.com/tensorflow/probability/issues/1271
+
+    # def get_dist(mean):
+    #     return VmappableIndependent(numpyro.distributions.Normal(mean, jnp.ones_like(mean)), mean.ndim)
+    #
+    # get_dists = jax.vmap(get_dist)
+    #
+    # key = jax.random.PRNGKey(42)
+    # mean = jax.random.normal(key, (8, 1))
+    # means = jax.random.normal(key, (3, 8, 1))
+    #
+    # simple_dist = get_dist(mean)
+    # batched_dist = get_dists(means)
+    #
+    # print(simple_dist.batch_shape, "&", simple_dist.event_shape)  # Prints: () & (8,1)
+    # print(batched_dist.batch_shape, "&", batched_dist.event_shape)  # Prints: (3,) & (8,1)

@@ -1,6 +1,3 @@
-import functools
-import time
-import warnings
 from typing import Callable, Collection, Union
 
 import haiku as hk
@@ -26,12 +23,14 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         input_dim: int,
         output_dim: int,
         learning_mode: str = "both",
+        learn_likelihood: bool = True,
         weight_decay: float = 0.0,
         feature_dim: int = 2,
         covar_module: Union[str, Callable[[], JAXKernel]] = "NN",
         mean_module: Union[str, Callable[[], JAXMean]] = "NN",
         mean_nn_layers: Collection[int] = (32, 32),
         kernel_nn_layers: Collection[int] = (32, 32),
+        initial_noise_std: float = 0.01,
         task_batch_size: int = 5,
         num_tasks: int = None,
         lr: float = 1e-3,
@@ -49,6 +48,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             random_state,
             task_batch_size,
             num_tasks,
+            flatten_ys=True,
         )
 
         assert learning_mode in [
@@ -73,6 +73,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             feature_dim,
             mean_nn_layers,
             kernel_nn_layers,
+            learn_likelihood,
+            initial_noise_std,
         )
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
@@ -189,9 +191,9 @@ if __name__ == "__main__":
             x_plot = np.linspace(-5, 5, num=150)
             x_context, y_context, x_test, y_test = meta_test_data[0]
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
-            pred_mean = pred_dist.loc
+            pred_mean = pred_dist.mean
 
-            plt.scatter(x_test, y_test, color="green")  # the unknown target test points
+            plt.scatter(x_testx, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
             plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
 

@@ -103,9 +103,9 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             random_state,
             task_batch_size,
             num_tasks,
-            num_iter_meta_fit,
-            minibatch_at_dataset_level,
-            dataset_batch_size,
+            flatten_ys=True,
+            minibatch_at_dataset_level=minibatch_at_dataset_level,
+            dataset_batch_size=dataset_batch_size,
         )
 
         # 0) check options
@@ -143,7 +143,6 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self._single_empty_state = pytree_unstack(self._empty_states)
 
         def mean_std_map(mod_name: str, name: str, _: jnp.array):
-            return 0.0, 1.0
             # for each module and parameter, we can specify custom mean and std for the hyperprior
             transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
             # transform positive parameters to log_scale for storage
@@ -219,8 +218,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
     def _meta_step(self, minibatch):
         xs_tasks, ys_tasks = minibatch
-        log_prob, self.particles = self.svgd.step(self.particles, xs_tasks, ys_tasks)
-        return log_prob
+        neg_log_prob, self.particles = self.svgd.step(self.particles, xs_tasks, ys_tasks)
+        return neg_log_prob
 
     def _recompute_posterior(self):
         # use the stored data in xs_data, ys_data to instantiate a base_learner

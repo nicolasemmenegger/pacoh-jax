@@ -35,6 +35,9 @@ class SVGD:
             lambda params, rng, *data: jnp.sum(target_log_prob_batched(params, rng, *data))
         )
 
+        # mainly for unit testing
+        self._log_prob_batched = target_log_prob_batched
+
         # b) kernel grad and matrix function
         def sum_cols_of_kernel(params):
             # note that both data and rng are not needed

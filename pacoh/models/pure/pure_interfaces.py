@@ -1,17 +1,15 @@
-from typing import NamedTuple, Any, Optional, Callable, Tuple
+from typing import NamedTuple, Any, Callable, Tuple
 
 from jax import numpy as jnp
 
 
-class VanillaGPInterface(
-    NamedTuple
-):  # TODO: This can probably be called statefulbaselearnerinterface or something like this
+class VanillaGPInterface(NamedTuple):
     fit_fn: Any  # fit
     pred_dist_fn: Any
     prior_fn: Any
 
 
-class VanillaBNNVIInterface(NamedTuple):  # TODO: This can probably be called BaseLearnerInterface
+class VanillaBNNVIInterface(NamedTuple):
     pred_dist: Any  # Callable[[Tree, jnp.array], Distribution]
     pred: Any  # Callable[[Tree, jnp.array], Distribution]
     log_prob: Any
@@ -23,7 +21,7 @@ class LikelihoodInterface(NamedTuple):
 
 
 class BaseLearnerInterface(NamedTuple):
-    """TODO this needs to be vectorized in some way. The MAP version needs to share the same cholesky across calls
+    """
     kernel, mean and likelihood, but needs to perform target inference in parallel."""
 
     """This is the interface PACOH modules learners should provide.

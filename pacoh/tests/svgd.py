@@ -7,7 +7,7 @@ import numpy as np
 from jax import numpy as jnp
 
 from pacoh.models.vanilla_bnn_svgd import BayesianNeuralNetworkSVGD
-from pacoh.modules.kernels import pytree_rbf_set, rbf_cov, pytree_rbf
+from pacoh.modules.kernels import pytree_rbf_set, rbf_cov, pytree_rbf, get_pytree_rbf_fn
 from pacoh.tests.utils import get_simple_sinusoid_dataset
 from pacoh.util.tree import pytree_unstack, broadcast_params
 from pacoh.util.typing import Tree
@@ -61,7 +61,7 @@ class SVGDTest(TreeTestCase):
 
     def test_phi_function(self):
         data = self.xs[:8], self.ys[:8]
-        test_update = self.svgd.neg_phi_update(self.particles, *data)
+        loss, test_update = self.svgd.neg_phi_update(self.particles, *data)
 
         # the above is a vmapped, and jitted, pytree compatible version
         # now compare this to a slower, but easier to understand version corresponding to the pseudocode in the paper
@@ -69,7 +69,7 @@ class SVGDTest(TreeTestCase):
         def log_prob_distributed(
             particle, rng, *data
         ):  # kind of a hack because we only have access to the batched version...
-            return self.svgd.target_log_prob_batched(broadcast_params(particle, self.n), rng, *data)
+            return self.svgd._log_prob_batched(broadcast_params(particle, self.n), rng, *data)
 
         unstacked_particles = pytree_unstack(self.particles)
         log_qs_fns = [
@@ -102,7 +102,9 @@ class SVGDTest(TreeTestCase):
 
     def test_pytree_rbf(self):
         """Tests whether the pytree and vmap based implementation of the kernel matrix for svgd is working."""
-        pytree_res = pytree_rbf_set(self.particles, self.particles, 1.0, 1.0)
+        pytree_res = get_pytree_rbf_fn(1.0, 1.0)(
+            self.particles
+        )  # pytree_rbf_set(self.particles, self.particles, 1.0, 1.0)
         n = self.stacked_params.shape[0]
         for i in range(n):
             for j in range(n):

@@ -1,60 +1,88 @@
-import warnings
+from abc import ABC, abstractmethod
 
 import numpyro
-from numpyro.distributions import (
-    Normal,
-    TransformedDistribution,
-    MultivariateNormal,
-    Independent,
-)
-from numpyro.distributions.transforms import AffineTransform
-import numpy as np
-from jax import numpy as jnp
+from numpyro.distributions import Categorical, MixtureSameFamily, Independent, MultivariateNormal, Normal
+import numpyro.distributions as npd
+from jax import numpy as jnp, tree_util
 import haiku as hk
 from jax.scipy.linalg import cho_solve, cho_factor
 
 from pacoh.modules.common import PositiveParameter
 from pacoh.util.constants import LIKELIHOOD_MODULE_NAME
-from pacoh.util.tree import stack_distributions
 
 
-class AffineTransformedDistribution(TransformedDistribution):
-    r"""
-    Implements an affine transformation of a probability distribution p(x)
+class VmappableDistribution(ABC):
+    @abstractmethod
+    def get_numpyro_distribution(self):
+        pass
 
-    x_transformed = mean + std * x , x \sim p(x)
+    @abstractmethod
+    def tree_flatten(self):
+        pass
+        # base_flatten, base_aux = self.base_dist.tree_flatten()
+        # return base_flatten, (
+        #     type(self.base_dist),
+        #     base_aux,
+        #     self.reinterpreted_batch_ndims,
+        # )
 
-    Args:
-        base_dist: (torch.distributions.Distribution) probability distribution to transform
-        normalization_mean: (np.ndarray) additive factor to add to x
-        normalization_std: (np.ndarray) multiplicative factor for scaling x
-    """
+    @classmethod
+    @abstractmethod
+    def tree_unflatten(cls, aux_data, params):
+        pass
 
-    def __init__(self, base_dist, normalization_mean, normalization_std):
-        self.norm_scale = normalization_std
-        normalization_transform = AffineTransform(loc=normalization_mean, scale=normalization_std)
-        super().__init__(base_dist, normalization_transform)
+    # register Distribution as a pytree
+    # ref: https://github.com/google/jax/issues/2916
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        tree_util.register_pytree_node(cls, cls.tree_flatten, cls.tree_unflatten)
 
-    @property
-    def mean(self):
-        return self.transforms[0](self.base_dist.mean)
+        # base_cls, base_aux, reinterpreted_batch_ndims = aux_data
+        # base_dist = base_cls.tree_unflatten(base_aux, params)
+        # return cls(base_dist, reinterpreted_batch_ndims)
 
-    @property
-    def stddev(self):
-        if hasattr(self.base_dist, "scale"):
-            return np.exp(np.log(self.base_dist.scale) + np.log(self.norm_scale))
-        elif hasattr(self.base_dist, "variance"):
-            return np.exp(0.5 * np.log(self.base_dist.variance) + np.log(self.norm_scale))
-        elif hasattr(self.base_dist, "stddev"):
-            return np.exp(np.log(self.base_dist.stddev) + np.log(self.norm_scale))
 
-    @property
-    def variance(self):
-        return np.exp(np.log(self.base_dist.variance) + 2 * np.log(self.norm_scale))
+# The following distributions are a small hack that allows us to vmap functions returning predictive distributions
+class DiagonalGaussian(VmappableDistribution):
+    def __init__(self, loc, scale, event_dims=2):
+        self.loc = loc
+        self.scale = scale
+        self.event_dims = event_dims
 
-    @property
-    def iid_normal(self):
-        return Normal(loc=self.mean, scale=self.stddev)
+    def get_numpyro_distribution(self):
+        return npd.Independent(npd.Normal(self.loc, self.scale), self.event_dims)
+
+    def tree_flatten(self):
+        return (self.loc, self.scale), self.event_dims  # flattened_dist, aux
+        # Also, dear jax, why are the return values reverse of args of tree_unflatten??
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, params):
+        # aux_data is event_dims
+        loc, scale = params
+        return cls(loc, scale, aux_data)
+
+
+# class DiagonalGaussianMixture(DiagonalGaussian):
+#     def get_numpyro_distribution(self):
+#         return get_mixture(super().get_numpyro_distribution(),
+
+
+# class MultivariateGaussian:
+#     def __init__(self, loc, covariance):
+#         self.loc = loc
+#         self.covariance = covariance
+#
+#     def get_numpyro_distribution(self):
+#         return npd.MultivariateNormal(self.loc, self.scale), self.event_dims)
+#
+#     def tree_flatten(self):
+#         return (self.loc, self.covariance), None
+#
+#     @classmethod
+#     def tree_unflatten(cls, aux_data, params):
+#         # aux_data is event_dims
+#         return cls(*params, aux_data)
 
 
 class JAXGaussianLikelihood(hk.Module):
@@ -73,38 +101,51 @@ class JAXGaussianLikelihood(hk.Module):
             self.variance = lambda: variance
 
     def __call__(self, posterior):
-        if isinstance(posterior, numpyro.distributions.MultivariateNormal):
+        if isinstance(posterior, jnp.ndarray):
+            # just an array of means
+            new_scale = jnp.sqrt(self.variance()) * jnp.ones_like(posterior)
+            return get_diagonal_gaussian_vmappable(posterior, new_scale)
+            # return numpyro.distributions.Normal(loc=posterior, scale=new_scale)
+        elif isinstance(posterior, numpyro.distributions.MultivariateNormal):
+            raise NotImplementedError
             d = posterior.loc.shape[0]
             cov_with_noise = posterior.covariance_matrix + jnp.eye(d, d) * self.variance()
             return numpyro.distributions.MultivariateNormal(
                 loc=posterior.loc, covariance_matrix=cov_with_noise
             )
-        elif isinstance(posterior, numpyro.distributions.Independent):
-            scale = jnp.sqrt(posterior.variance + self.variance())
-            return get_diagonal_gaussian(posterior.base_dist.loc, scale)
+        elif isinstance(posterior, DiagonalGaussian):
+            scale = jnp.sqrt(jnp.square(posterior.scale) + self.variance())
+            return get_diagonal_gaussian_vmappable(posterior.base_dist.loc, scale)
         else:
-            raise ValueError("posterior should be either a multivariate diagonal or full covariance gaussian")
+            raise ValueError(
+                "posterior should be either a multivariate diagonal, full covariance gaussian or an "
+                + "array of means"
+            )
 
     def log_prob(self, ys_true, ys_pred):
-        gauss = get_diagonal_gaussian(jnp.zeros_like(ys_true), jnp.sqrt(self.variance()) * jnp.ones_like(ys_true))
-        return gauss.log_prob(ys_pred)
-
-    # def get_posterior_from_means(self, loc):
-    #     batch_size = loc.shape[0]
-    #     var = self.variance()
-    #     stds = jnp.broadcast_to(jnp.sqrt(var), (batch_size, *var.shape))
-    #     return get_diagonal_gaussian(loc, stds)
+        gauss = get_diagonal_gaussian_vmappable(
+            jnp.zeros_like(ys_true), jnp.sqrt(self.variance()) * jnp.ones_like(ys_true)
+        ).get_numpyro_distribution()
+        return gauss.log_prob(ys_pred - ys_true)
 
 
 def get_mixture(pred_dists, n):
-    pred_dists = stack_distributions(pred_dists)
-    mixture_weights = numpyro.distributions.Categorical(probs=jnp.ones((n,)) / n)
-    return numpyro.distributions.MixtureSameFamily(mixture_weights, pred_dists)
+    # pred_dists = stack_distributions(pred_dists)
+    cat = Categorical(probs=jnp.ones((n,)) / n)
+    return MixtureSameFamily(cat, pred_dists)
 
 
-def get_diagonal_gaussian(loc, scale):
+def get_diagonal_gaussian_vmappable(loc, scale) -> DiagonalGaussian:
+    # Due to https://github.com/pyro-ppl/numpyro/issues/1317, we use our own vmappable distributions here
     assert loc.shape == scale.shape and loc.ndim <= 2
-    return numpyro.distributions.Independent(numpyro.distributions.Normal(loc, scale), loc.ndim)
+    return DiagonalGaussian(loc, scale, loc.ndim)  # the resulting distribution has trivial batch_shape
+
+
+def get_diagonal_gaussian_numpyro(loc, scale, event_dims=None) -> Independent:
+    if event_dims is None:
+        event_dims = loc.ndim
+    assert loc.shape == scale.shape and loc.ndim >= event_dims
+    return Independent(Normal(loc, scale), event_dims)
 
 
 def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> float:
@@ -120,9 +161,30 @@ def multivariate_kl(dist1: MultivariateNormal, dist2: MultivariateNormal) -> flo
 
 
 def diagonalize_gaussian(dist):
-    if isinstance(dist, Independent):
+    if isinstance(dist, Independent) or (
+        isinstance(dist, MixtureSameFamily) and isinstance(dist.component_distribution, Independent)
+    ):
         return dist
     elif isinstance(dist, MultivariateNormal):
-        return get_diagonal_gaussian(dist.mean, jnp.sqrt(jnp.diag(dist.covariance_matrix)))
+        return get_diagonal_gaussian_numpyro(dist.mean, jnp.sqrt(jnp.diag(dist.covariance_matrix)))
     else:
         raise ValueError("unknown argument type")
+
+
+if __name__ == "__main__":
+    import jax
+
+    def get_dist(mean):
+        return DiagonalGaussian(mean, jnp.ones_like(mean), mean.ndim)
+
+    get_dists = jax.vmap(get_dist)
+
+    key = jax.random.PRNGKey(42)
+    mean = jax.random.normal(key, (8, 1))
+    means = jax.random.normal(key, (3, 8, 1))
+
+    simple_dist = get_dist(mean).get_numpyro_distribution()
+    batched_dist = get_dists(means).get_numpyro_distribution()
+
+    print(simple_dist.batch_shape, "&", simple_dist.event_shape)  # prints: () & (8,1)
+    print(batched_dist.batch_shape, "&", batched_dist.event_shape)  # Should print: (3,) & (8,1)

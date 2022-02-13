@@ -2,57 +2,20 @@ import functools
 
 import haiku as hk
 import jax.nn
-from jax import numpy as jnp
 
 from pacoh.modules.batching import (
-    transform_and_batch_module,
     multi_transform_and_batch_module,
 )
-from pacoh.modules.distributions import JAXGaussianLikelihood, get_diagonal_gaussian
+from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel, JAXRBFKernelNN, JAXKernel
 from pacoh.modules.means import JAXConstantMean, JAXZeroMean, JAXMean
 from pacoh.models.pure.pure_interfaces import (
-    LikelihoodInterface,
     VanillaGPInterface,
     VanillaBNNVIInterface,
     BaseLearnerInterface,
 )
 from pacoh.util.constants import MLP_MODULE_NAME
-
-
-# @transform_and_batch_module
-# def get_pure_batched_nn_functions(output_dim, hidden_layer_sizes, activation):
-#     def nn_forward(xs):
-#         nn = hk.nets.MLP(output_sizes=hidden_layer_sizes + (output_dim,), activation=activation)
-#         return nn(xs)
-#
-#     return nn_forward
-
-
-# @functools.partial(
-#     multi_transform_and_batch_module,
-#     num_data_args={"log_prob": 2, "get_posterior_from_means": 1},
-# )
-# def get_pure_batched_likelihood_functions(likelihood_initial_std, learn_likelihood=True):
-#     def factory():
-#         likelihood = JAXGaussianLikelihood(
-#             variance=likelihood_initial_std * likelihood_initial_std,
-#             learn_likelihood=learn_likelihood,
-#         )
-#
-#         def log_prob(ys_true, ys_pred):
-#             return likelihood.log_prob(ys_true, ys_pred)
-#
-#         # add noise to a mean prediction (same as add_noise with a zero_variance_pred_f)
-#         def get_posterior_from_means(ys_pred):
-#             return likelihood.get_posterior_from_means(ys_pred)
-#
-#         return get_posterior_from_means, LikelihoodInterface(
-#             log_prob=log_prob, get_posterior_from_means=get_posterior_from_means
-#         )
-#
-#     return factory
 
 
 def construct_vanilla_gp_forward_fns(
@@ -83,7 +46,7 @@ def construct_bnn_forward_fns(
     learn_likelihood=True,
 ):
     def factory():
-        likelihood = JAXGaussianLikelihood(
+        likelihood_module = JAXGaussianLikelihood(
             variance=likelihood_initial_std * likelihood_initial_std,
             learn_likelihood=learn_likelihood,
         )
@@ -96,15 +59,14 @@ def construct_bnn_forward_fns(
 
         def pred_dist(xs):
             means = nn(xs)
-            gaussian = get_diagonal_gaussian(means, jnp.zeros_like(means))
-            lik = likelihood(gaussian)
-            return lik
+            return likelihood_module(means)  # this adds heteroscedastic variance to all datapoints
 
         def log_prob(ys_true, ys_pred):
-            return likelihood.log_prob(ys_true, ys_pred)
+            return likelihood_module.log_prob(ys_true, ys_pred)
 
         def pred(xs):
-            return nn(xs)
+            res = nn(xs)
+            return res
 
         return pred_dist, VanillaBNNVIInterface(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
 

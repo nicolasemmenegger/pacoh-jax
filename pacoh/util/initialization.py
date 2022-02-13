@@ -1,6 +1,6 @@
 import functools
 import warnings
-from typing import Callable, Tuple, List, Union
+from typing import Callable, Tuple, List, Union, Iterable
 
 import jax
 import jax.numpy as jnp
@@ -49,6 +49,9 @@ def initialize_batched_model(
     """Initializes n_models according to the supplied vmapped init function.
     The second return value is a tree of parameters for a single module, which is useful for specifying
     distributions over parameters.
+    :param shapes: the shapes of arguments passed to the init function, e.g. if the init function takes xs,
+    then most likely one argument (batch_size, input_dim). The reason there can be multiple shapes passed is that
+    sometimes the init function of a module also needs labels, e.g. when learning the parameters of the log_likelihood
     """
     params = _call_init_batched(init, n_models, prng_key, *shapes)
     param_template = pytree_unstack(params)[0]
