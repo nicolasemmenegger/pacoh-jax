@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from collections import Callable
+from typing import Any
 
 import numpyro
 from numpyro.distributions import Categorical, MixtureSameFamily, Independent, MultivariateNormal, Normal
@@ -171,20 +173,52 @@ def diagonalize_gaussian(dist):
         raise ValueError("unknown argument type")
 
 
+DIST_ID = [npd.Independent, npd.Normal]  # TODO add others, see how they behave
+
+def _auxiliary_to_jax_type(pytree):
+    converted = jax.tree_map(lambda leaf: DIST_ID.index(leaf) if leaf in DIST_ID else leaf, pytree)
+    blueprint = jax.tree_map(lambda leaf: leaf in DIST_ID, pytree)
+    return converted, blueprint
+
+def _restore_auxiliary(converted, blueprint):
+    return jax.tree_multimap(lambda leaf, do_restore: DIST_ID[leaf] if do_restore else leaf, converted, blueprint)
+
+def _flatten_dist(dist: npd.Distribution):
+    params, aux = dist.tree_flatten()
+    return params, *_auxiliary_to_jax_type(aux), DIST_ID.index(dist.__class__)
+
+def vmap_distribution(f: Callable[Any, npd.Distribution], in_axes=0, out_axes=0, axis_name=None):
+    """Helper function that vmaps a function that may return a distribution as output. """
+    flat_f = lambda *args, **kwargs: _flatten_dist(f(*args, **kwargs))  # this returns the flat_dist, type tuple
+    vmapped = jax.vmap(flat_f, in_axes=in_axes, out_axes=(out_axes, None, None, None), axis_name=axis_name)
+
+    def unflattened(*args, **kwargs):
+        vmapped_output, aux_converted, aux_blueprint, cls_id = vmapped(*args, **kwargs)
+        cls = DIST_ID[cls_id]
+        aux = _restore_auxiliary(aux_converted, aux_blueprint)
+        return cls.tree_unflatten(aux, vmapped_output)
+
+    return unflattened
+
 if __name__ == "__main__":
     import jax
 
-    def get_dist(mean):
-        return DiagonalGaussian(mean, jnp.ones_like(mean), mean.ndim)
+    # def get_dist(mean):
+    #     return DiagonalGaussian(mean, jnp.ones_like(mean), mean.ndim)
 
-    get_dists = jax.vmap(get_dist)
+    def get_dist(mean):
+        return Independent(Normal(mean, jnp.ones_like(mean)), 2)
+
+    get_dists = vmap_distribution(get_dist)
 
     key = jax.random.PRNGKey(42)
     mean = jax.random.normal(key, (8, 1))
     means = jax.random.normal(key, (3, 8, 1))
 
-    simple_dist = get_dist(mean).get_numpyro_distribution()
-    batched_dist = get_dists(means).get_numpyro_distribution()
+    simple_dist = get_dist(mean)  ##  .get_numpyro_distribution()
+    batched_dist = get_dists(means)  ## .get_numpyro_distribution()
 
     print(simple_dist.batch_shape, "&", simple_dist.event_shape)  # prints: () & (8,1)
     print(batched_dist.batch_shape, "&", batched_dist.event_shape)  # Should print: (3,) & (8,1)
+
+    assert np.arra
