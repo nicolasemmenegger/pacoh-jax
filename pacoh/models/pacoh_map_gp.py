@@ -193,7 +193,7 @@ if __name__ == "__main__":
             pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
             pred_mean = pred_dist.mean
 
-            plt.scatter(x_testx, y_test, color="green")  # the unknown target test points
+            plt.scatter(x_test, y_test, color="green")  # the unknown target test points
             plt.scatter(x_context, y_context, color="red")  # the target train points
             plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
 

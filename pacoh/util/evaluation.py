@@ -1,17 +1,14 @@
 import numpy as np
 import scipy.stats
-from numpyro.distributions import Normal
 
-from tensorflow_probability.substrates.jax.distributions import Independent
+from jax import numpy as jnp
+from pacoh.util.distributions import is_diagonal_gaussian_dist
 
 
 def calib_error(pred_dist_diagonalized, test_ys):
     """Both inputs should be 2 dimensional."""
-    return 0.0
-    if not isinstance(pred_dist_diagonalized, Independent) or not isinstance(
-        pred_dist_diagonalized.base_dist, Normal
-    ):
-        raise ValueError("Wrong argument type")
+    if not is_diagonal_gaussian_dist(pred_dist_diagonalized):
+        raise NotImplementedError("Cannot compute for something that is not a diagonal gaussian")
 
     cdf_vals = pred_dist_diagonalized.base_dist.cdf(test_ys)
     if not (cdf_vals.shape[-1] == 1 and cdf_vals.ndim == 2):
@@ -31,13 +28,7 @@ def calib_error(pred_dist_diagonalized, test_ys):
 
 
 def calib_error_chi2(pred_dist_diagonalized, test_ys):
-    return 0.0
-    if not isinstance(pred_dist_diagonalized, VmappableIndependent) or not isinstance(
-        pred_dist_diagonalized.base_dist, Normal
-    ):
-        raise ValueError("Wrong argument type")
-
-    z2 = ((pred_dist_diagonalized.base_dist.mean - test_ys) / pred_dist_diagonalized.base_dist.scale) ** 2
+    z2 = ((pred_dist_diagonalized.mean - test_ys) / jnp.sqrt(pred_dist_diagonalized.variance)) ** 2
     f = lambda p: np.mean(z2 < scipy.stats.chi2.ppf(p, 1))
     conf_levels = np.linspace(0.05, 1, 20)
     accs = np.array([f(p) for p in conf_levels])

@@ -61,7 +61,6 @@ class GPRegressionVanilla(RegressionModel):
         self._rng, init_key = jax.random.split(self._rng)
         self._params, self._state = initialize_model(self._init_fn, init_key, (1, input_dim))
 
-        print(self._params)
         # keep these around to reset to prior and evaluate prior
         self._prior_params = self._params
         self._prior_state = self._state
@@ -135,7 +134,6 @@ if __name__ == "__main__":
 
     gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=None, normalize_data=True)
     gp.add_data_points(x_data_train, y_data_train)
-    print(gp.eval(x_data_test, y_data_test))
 
     x_plot = np.linspace(6, -6, num=n_test_samples)
 

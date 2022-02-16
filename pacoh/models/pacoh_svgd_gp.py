@@ -16,7 +16,7 @@ from pacoh.util.constants import (
     MEAN_MODULE_NAME,
 )
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
-from pacoh.modules.distributions import get_mixture
+from pacoh.util.distributions import get_mixture, vmap_dist
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel, get_pytree_rbf_fn
 from pacoh.util.initialization import (
@@ -194,7 +194,9 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         )
 
         # g) thread together svgd
-        mll_many_many = jax.jit(jax.vmap(self._apply.base_learner_mll_estimator, (None, None, None, 0, 0), 0))
+        mll_many_many = jax.jit(
+            vmap_dist(self._apply.base_learner_mll_estimator, (None, None, None, 0, 0), 0)
+        )
         self.svgd = SVGD(
             functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
             jax.jit(get_pytree_rbf_fn(svgd_kernel_bandwidth, 1.0)),

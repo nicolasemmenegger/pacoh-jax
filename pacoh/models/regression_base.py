@@ -5,9 +5,15 @@ import jax
 from jax import numpy as jnp
 from abc import abstractmethod
 
+from numpyro.distributions import MixtureSameFamily
 from tqdm import trange
 
-from pacoh.modules.distributions import diagonalize_gaussian
+from pacoh.util.distributions import (
+    diagonalize_gaussian,
+    is_diagonal_gaussian_dist,
+    get_diagonal_gaussian,
+    is_gaussian_dist,
+)
 from pacoh.util.data_handling import (
     handle_batch_input_dimensionality,
     DataNormalizer,
@@ -123,8 +129,8 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         calibr_error = calib_error(diagonalize_gaussian(pred_dist), test_ys)
         calibr_error_chi2 = calib_error_chi2(diagonalize_gaussian(pred_dist), test_ys)
         return {
-            "avg. ll": avg_log_likelihood.item(),
-            "rmse": rmse.item(),  # rmse.item(),
+            "avg. ll": avg_log_likelihood,
+            "rmse": rmse,
             "calib err.": calibr_error,  # calibr_error.item(),
             "calib err. chi2": calibr_error_chi2,
         }
@@ -132,6 +138,13 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def confidence_intervals(self, test_x, confidence=0.9):
         pred_dist = self.predict(test_x, return_density=True, return_full_covariance=False)
         alpha = (1 - confidence) / 2
+        if not is_diagonal_gaussian_dist(pred_dist):
+            if is_gaussian_dist(pred_dist):
+                pred_dist = diagonalize_gaussian(pred_dist)
+            elif isinstance(pred_dist, MixtureSameFamily):
+                pred_dist = get_diagonal_gaussian(pred_dist.mean, jnp.sqrt(pred_dist.variance))
+            else:
+                raise NotImplementedError("I don't know how to approximate these confidence sets")
         ucb = pred_dist.base_dist.icdf((1 - alpha) * jnp.ones(pred_dist.event_shape))
         lcb = pred_dist.base_dist.icdf(alpha * jnp.ones(pred_dist.event_shape))
         return lcb, ucb

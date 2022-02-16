@@ -2,7 +2,7 @@ import functools
 
 import numpyro.distributions
 from numpyro.distributions import MultivariateNormal
-from pacoh.modules.distributions import get_diagonal_gaussian_vmappable
+from pacoh.util.distributions import get_diagonal_gaussian
 
 from jax import numpy as jnp
 from jax.scipy.linalg import cho_solve, cho_factor
@@ -100,7 +100,7 @@ class JAXExactGP:
         if return_full_covariance:
             return MultivariateNormal(mean.flatten(), cov)
         else:
-            return get_diagonal_gaussian_vmappable(mean, jnp.diag(cov))
+            return get_diagonal_gaussian(mean, jnp.diag(cov))
 
     def add_data_and_refit(self, xs, ys):
         old_xs = hk.get_state("xs")

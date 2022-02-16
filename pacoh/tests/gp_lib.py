@@ -8,7 +8,7 @@ import torch
 from numpyro.distributions import MultivariateNormal
 from jax import numpy as jnp
 
-from pacoh.modules.distributions import multivariate_kl
+from pacoh.util.distributions import multivariate_kl
 from pacoh.modules.means import JAXConstantMean, JAXZeroMean
 
 

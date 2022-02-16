@@ -16,7 +16,8 @@ from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean, JAXZeroMean
 from pacoh.modules.kernels import JAXKernel, JAXRBFKernel
-from pacoh.modules.distributions import multivariate_kl, JAXGaussianLikelihood
+from pacoh.modules.distributions import JAXGaussianLikelihood
+from pacoh.util.distributions import multivariate_kl
 from pacoh.util.initialization import (
     initialize_model_with_state,
     initialize_optimizer,

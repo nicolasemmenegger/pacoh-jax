@@ -10,7 +10,7 @@ from jax import numpy as jnp
 from pacoh.models.regression_base import RegressionModel
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
-from pacoh.modules.distributions import get_mixture, VmappableIndependent
+from pacoh.util.distributions import get_mixture
 from pacoh.util.constants import (
     LIKELIHOOD_MODULE_NAME,
     MLP_MODULE_NAME,
@@ -86,7 +86,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
         likelihood_prior_std: float = 0.0,
         batch_size_vi: int = 10,
         batch_size: int = 8,
-        lr: float = 1e-2,
+        lr: float = 1e-3,
     ):
         """
         :param input_dim: The dimension of a data point
@@ -211,7 +211,7 @@ if __name__ == "__main__":
     nn = BayesianNeuralNetworkVI(
         input_dim=d,
         output_dim=1,
-        batch_size_vi=1,
+        batch_size_vi=10,
         hidden_layer_sizes=(32, 32),
         prior_weight=0.0,
         learn_likelihood=False,

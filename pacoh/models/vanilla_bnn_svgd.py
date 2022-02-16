@@ -9,11 +9,11 @@ from jax import numpy as jnp
 
 from pacoh.algorithms.svgd import SVGD
 from pacoh.models.regression_base import RegressionModel
-from pacoh.modules.distributions import get_mixture
+from pacoh.util.distributions import get_mixture
 from pacoh.modules.kernels import pytree_rbf_set, get_pytree_rbf_fn
 from pacoh.modules.belief import GaussianBeliefState, GaussianBelief
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
-from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME
+from pacoh.util.constants import LIKELIHOOD_MODULE_NAME, MLP_MODULE_NAME, POSITIVE_PARAMETER_NAME
 from pacoh.util.data_handling import normalize_predict, DataNormalizer
 from pacoh.util.initialization import initialize_batched_model
 
@@ -27,11 +27,11 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         normalizer: DataNormalizer = None,
         random_state: jax.random.PRNGKey = None,
         hidden_layer_sizes=(32, 32),
-        activation: Callable = jax.nn.relu,
-        learn_likelihood: bool = True,
-        prior_std: float = 0.1,
-        prior_weight: float = 0.1,
-        likelihood_prior_mean: float = jnp.log(0.1),
+        activation: Callable = jax.nn.elu,
+        learn_likelihood: bool = False,
+        prior_std: float = 0.35,
+        prior_weight: float = 0.001,
+        likelihood_prior_mean: float = 0.05,
         likelihood_prior_std: float = 0.1,
         n_particles: int = 10,
         batch_size: int = 8,
@@ -56,9 +56,10 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         # b) Initialize the prior and the particles of the posterior
         params, template = initialize_batched_model(init, n_particles, init_key, (batch_size, input_dim))
 
-        def mean_std_map(mod_name: str, _: str, __: jnp.array):
+        def mean_std_map(mod_name: str, name: str, __: jnp.array):
             if LIKELIHOOD_MODULE_NAME in mod_name:
-                return likelihood_prior_mean, likelihood_prior_std
+                transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
+                return transform(likelihood_prior_mean, name), likelihood_prior_std
             elif MLP_MODULE_NAME in mod_name:
                 return 0.0, prior_std
             else:
@@ -75,11 +76,10 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
             ys_true_rep = jnp.repeat(jnp.expand_dims(ys, axis=0), n_particles, axis=0)
 
             log_likelihoods = apply_bdcst.log_prob(particles, None, ys_true_rep, ys_pred)
-            avg_log_likelihood = jnp.mean(log_likelihoods)
 
             prior_log_prob = GaussianBelief.log_prob(self.prior, particles)
 
-            return prior_weight * prior_log_prob + avg_log_likelihood
+            return prior_weight * prior_log_prob + log_likelihoods / batch_size
 
         # d) learning rate scheduler
         lr_scheduler = optax.constant_schedule(lr)
@@ -94,6 +94,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
             self.optimizer,
             self.optimizer_state,
         )
+        self.check_posterior_prob = log_prob
 
     def _recompute_posterior(self):
         pass
@@ -107,6 +108,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
 
     def _step(self, x_batch, y_batch):
         neg_log_prob, self.particles = self.svgd.step(self.particles, x_batch, y_batch)
+        self.check_posterior_prob(self.particles, None, x_batch, y_batch)
         return neg_log_prob
 
 
@@ -121,7 +123,7 @@ if __name__ == "__main__":
 
     n_val = 200
 
-    x_plot = np.linspace(-4, 4, num=n_val)
+    x_plot = np.linspace(-5, 5, num=n_val)
     x_plot = np.expand_dims(x_plot, -1)
     y_val = np.sin(x_plot) + np.random.normal(scale=0.1, size=x_plot.shape)
 
@@ -129,10 +131,10 @@ if __name__ == "__main__":
         input_dim=d,
         output_dim=1,
         hidden_layer_sizes=(64, 64, 64, 64),
-        prior_weight=0.1,
+        prior_weight=0.001,
         bandwidth=1000.0,
         learn_likelihood=True,
-        n_particles=1,
+        n_particles=10,
         batch_size=200,
     )
 
@@ -144,9 +146,11 @@ if __name__ == "__main__":
         from matplotlib import pyplot as plt
 
         pred = nn.predict(x_plot)
-        # lcb, ucb = nn.confidence_intervals(x_plot)
-        # plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
+        lcb, ucb = nn.confidence_intervals(x_plot)
+        plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
         plt.plot(x_plot, pred.mean)
+        for i in range(10):
+            plt.plot(x_plot, pred.component_distribution.mean[i], color="red")
         plt.scatter(x_train, y_train)
 
         plt.show()

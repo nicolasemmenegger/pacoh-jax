@@ -4,16 +4,12 @@ import warnings
 import numpy as np
 from typing import Optional
 import jax
-import numpyro.distributions
 from jax import numpy as jnp
-from numpyro.distributions import Independent, MultivariateNormal, Normal, MixtureSameFamily
+from numpyro.distributions import Independent, MultivariateNormal, MixtureSameFamily
 from torch.utils import data as torch_data
 from torch.utils.data.sampler import Sampler
 
-from pacoh.modules.distributions import (
-    get_diagonal_gaussian_numpyro,
-    diagonalize_gaussian,
-)
+from pacoh.util.distributions import get_diagonal_gaussian, is_gaussian_dist, diagonalize_gaussian
 
 
 class DataNormalizer:
@@ -103,13 +99,6 @@ class DataNormalizer:
         return [self.handle_data(xs, ys) for xs, ys in meta_tuples]
 
 
-def is_gaussian_dist(dist):
-    """Checks whether is a Gaussian distribution we support as public interface."""
-    return (isinstance(dist, Independent) and isinstance(dist.base_dist, Normal)) or isinstance(
-        dist, MultivariateNormal
-    )
-
-
 def normalize_gaussian_dist(pred_dist, normalizer):
     """Normalizes a gaussian distribution"""
     if not normalizer.turn_off_normalization:
@@ -123,7 +112,7 @@ def normalize_gaussian_dist(pred_dist, normalizer):
 
     if isinstance(pred_dist, Independent):
         new_scale = jnp.sqrt(pred_dist.variance) * y_std
-        transformed = get_diagonal_gaussian_numpyro(new_loc, new_scale, len(pred_dist.event_shape))
+        transformed = get_diagonal_gaussian(new_loc, new_scale, len(pred_dist.event_shape))
     elif isinstance(pred_dist, MultivariateNormal):
         assert (
             normalizer.flatten_ys

@@ -13,7 +13,8 @@ import numpyro.distributions as npd
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.models.pure.pure_interfaces import VanillaBNNVIInterface
 from pacoh.models.regression_base import RegressionModel
-from pacoh.modules.distributions import get_mixture, JAXGaussianLikelihood
+from pacoh.modules.distributions import JAXGaussianLikelihood
+from pacoh.util.distributions import get_mixture
 from pacoh.modules.kernels import pytree_sq_l2_dist
 from pacoh.util.constants import MLP_MODULE_NAME
 from pacoh.util.data_handling import normalize_predict
@@ -98,7 +99,7 @@ class SimpleNNTutorial(RegressionModel):
 
     @normalize_predict
     def predict(self, test_xs):
-        return self.apply.pred_dist(self.params, None, test_xs).get_numpyro_distribution()
+        return self.apply.pred_dist(self.params, None, test_xs)
 
     def _step(self, xs_batch, ys_batch):
         loss, grad = self._loss_val_and_grad(self.params, xs_batch, ys_batch)
@@ -152,7 +153,7 @@ class EnsembleNNTutorial(RegressionModel):
 
     @normalize_predict
     def predict(self, test_xs):
-        components = self.apply.pred_dist(self.params, None, test_xs).get_numpyro_distribution()
+        components = self.apply.pred_dist(self.params, None, test_xs)
         return get_mixture(components, self._ensemble_size)  # None since no randomness needed in forward pass
 
     def _step(self, xs_batch, ys_batch):
@@ -191,7 +192,7 @@ if __name__ == "__main__":
         jnp.array(x_plot),
         jnp.array(y_val),
     )
-    nn = SimpleNNTutorial(
+    nn = EnsembleNNTutorial(
         input_dim=d,
         output_dim=1,
     )
@@ -204,8 +205,8 @@ if __name__ == "__main__":
         nn.fit(log_period=100, num_iter_fit=n_iter_fit, xs_val=x_plot, ys_val=y_val)
 
         pred = nn.predict(x_plot)
-        # lcb, ucb = nn.confidence_intervals(x_plot)
-        # plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
+        lcb, ucb = nn.confidence_intervals(x_plot)
+        plt.fill_between(x_plot.flatten(), lcb.flatten(), ucb.flatten(), alpha=0.3)
         plt.plot(x_plot, pred.mean)
         plt.scatter(x_train, y_train)
 

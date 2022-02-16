@@ -8,13 +8,14 @@ from haiku import (
     MultiTransformed,
     MultiTransformedWithState,
 )
-from jax import vmap, numpy as jnp, jit
+from jax import numpy as jnp, jit
 import haiku as hk
 
 from pacoh.models.pure.pure_interfaces import BaseLearnerInterface
 from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel
+from pacoh.util.distributions import vmap_dist as vmap
 
 
 def get_batched_module(
