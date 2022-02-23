@@ -1,5 +1,6 @@
 from typing import Union, Any, Callable
 
+import jax
 from jax import numpy as jnp, vmap
 from jax.scipy.linalg import cho_solve, cho_factor
 from numpyro import distributions as npd

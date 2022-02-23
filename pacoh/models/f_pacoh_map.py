@@ -188,9 +188,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         """
         Computes the approximation of the functional kl divergence by subsampling
         :param particle: The parameters of the hyperposterior/prior
-        :param state: The state of the fitted model from estimating the mll
         :param xs: The dataset to fit
-        :param ys: The dataset to fit
         :return:
         evaluate the kl of the predictive distributions of prior and posterior
         """

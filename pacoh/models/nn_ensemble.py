@@ -1,14 +1,8 @@
-import functools
-
 import jax.nn
 import optax
 from jax import numpy as jnp
 import haiku as hk
-from tensorflow_probability.substrates import jax as tfp
-
-tfd = tfp.distributions
 import numpy as np
-import numpyro.distributions as npd
 
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
 from pacoh.models.pure.pure_interfaces import VanillaBNNVIInterface
