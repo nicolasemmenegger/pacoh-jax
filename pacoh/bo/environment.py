@@ -2,8 +2,8 @@ import numpy as np
 import os
 import time
 
-from meta_bo.domain import ContinuousDomain, DiscreteDomain
-from meta_bo.solver import EvolutionarySolver
+from pacoh.bo.domain import ContinuousDomain, DiscreteDomain
+from pacoh.bo.solver import EvolutionarySolver
 from config import BASE_DIR
 
 
@@ -70,7 +70,6 @@ class BenchmarkEnvironment(Environment):
             solver = EvolutionarySolver(
                 self.domain,
                 num_particles_per_d=num_particles_per_d,
-                num_iter_per_d=num_iter_per_d,
             )
             solution = solver.minimize(lambda x: self.f(x))
             return solution[1]
