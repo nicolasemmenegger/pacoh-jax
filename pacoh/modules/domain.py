@@ -1,7 +1,30 @@
+from typing import Union
 import numpy as np
 
 
-class ContinuousDomain:
+class Domain:
+
+    @property
+    def d(self) -> int:
+        return self._d
+
+    @property
+    def is_continuous(self) -> bool:
+        raise NotImplementedError
+
+    def normalize(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        raise NotImplementedError
+
+    def denormalize(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        raise NotImplementedError
+
+    @property
+    def default_x0(self) -> np.ndarray:
+        raise NotImplementedError
+
+
+class ContinuousDomain(Domain):
+
     def __init__(self, l, u):
         assert l.ndim == u.ndim == 1 and l.shape[0] == u.shape[0]
         assert np.all(l < u)
@@ -54,7 +77,8 @@ class ContinuousDomain:
         # return np.random.uniform(low=self.l, high=self.u, size=(1, self.d))
 
 
-class DiscreteDomain:
+class DiscreteDomain(Domain):
+
     def __init__(self, points, d=None):
         if points.ndim == 1:
             points = np.expand_dims(points, axis=-1)

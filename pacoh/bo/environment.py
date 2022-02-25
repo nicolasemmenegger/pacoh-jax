@@ -2,7 +2,7 @@ import numpy as np
 import os
 import time
 
-from pacoh.bo.domain import ContinuousDomain, DiscreteDomain
+from pacoh.modules.domain import ContinuousDomain, DiscreteDomain
 from pacoh.bo.solver import EvolutionarySolver
 from config import BASE_DIR
 

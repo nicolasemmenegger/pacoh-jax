@@ -1,4 +1,4 @@
-from pacoh.bo.domain import DiscreteDomain, ContinuousDomain
+from pacoh.modules.domain import DiscreteDomain, ContinuousDomain
 from pacoh.bo.solver import FiniteDomainSolver, EvolutionarySolver
 
 import numpy as np
