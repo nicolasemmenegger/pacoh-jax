@@ -48,5 +48,4 @@ class TestFunctionalKL(unittest.TestCase):
                 cov = rbf_cov(xs[i], xs[j], ls, os)
                 covar[i, j] = cov
 
-        print(covar)
         np.testing.assert_array_equal(covar, np.array(prior.covariance_matrix))

@@ -1,5 +1,5 @@
 import functools
-from typing import Callable, Collection, Union
+from typing import Callable, Collection, Union, Optional
 
 import haiku as hk
 import jax.random
@@ -50,6 +50,8 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyperprior_noise_var=1e-3,  # this has numerical stability implications
         normalize_data: bool = True,
         normalizer: DataNormalizer = None,
+        minibatch_at_dataset_level: bool = False, # if True, we can vectorize the loop ranging over the tasks
+        dataset_batch_size: Optional[int] = None, # if None, and minibatch_at_dataset_level is True, then the datasets have to have the same size
         random_state: jax.random.PRNGKey = None,
     ):
         super().__init__(
@@ -61,6 +63,8 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             task_batch_size,
             num_tasks,
             flatten_ys=True,
+            minibatch_at_dataset_level=minibatch_at_dataset_level,
+            dataset_batch_size=dataset_batch_size
         )
 
         assert isinstance(domain, ContinuousDomain) or isinstance(domain, DiscreteDomain)
@@ -117,30 +121,36 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self.hyperprior_noise_var = hyperprior_noise_var
         self._rng, sample_key = jax.random.split(self._rng)
 
-        def target_post_prob(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
-            """Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
-            number of elements of shape [input_size]. Similarly for meta_ys
-            """
-            loss = 0.0
-            keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
-            for xs, ys, k in zip(meta_xs_batch, meta_ys_batch, keys):
-                # marginal ll
-                mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
-                kl = self._functional_kl(particle, k, xs)
+        def target_post_prob_one_task(particle, key, xs, ys):
+            mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
+            kl = self._functional_kl(particle, key, xs)
 
-                # this is formula (3) from pacoh, and prior_weight corresponds to kappa
-                n = num_tasks
-                m = xs.shape[0]
-                loss += (
+            # this is formula (3) from pacoh, and prior_weight corresponds to kappa
+            n = num_tasks
+            m = xs.shape[0]
+            return (
                     -mll / (task_batch_size * m)
                     + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
-                )
+            )
 
+        def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
+            """meta_xs_batch is a python list of jnp.arrays"""
+            loss = 0.0
+            keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
+            for xs, ys, key in zip(meta_xs_batch, meta_ys_batch, keys):
+                loss += target_post_prob_one_task(particle, key, xs, ys)
             return loss
 
-        self.target = target_post_prob
+        target_post_prob_vmap_array = jax.vmap(target_post_prob_one_task, in_axes=(None, 0, 0, 0))
+        def target_post_prob_vmap(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
+            """meta_xs_batch is a python list of jnp.arrays"""
+            keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
+            return jnp.sum(target_post_prob_vmap_array(particle, keys, meta_xs_batch, meta_ys_batch))
 
-        self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob))
+        if minibatch_at_dataset_level:
+            self.target_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(target_post_prob_vmap)))
+        else:
+            self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob_loop))
 
         # f-pacoh specific initialisation
         self.domain_dist = Uniform(low=domain.l, high=domain.u)
@@ -275,6 +285,7 @@ if __name__ == "__main__":
             mean_nn_layers=NN_LAYERS,
             feature_dim=2,
             kernel_nn_layers=NN_LAYERS,
+            minibatch_at_dataset_level=False,
         )
 
         itrs = 0
