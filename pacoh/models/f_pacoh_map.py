@@ -50,8 +50,10 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyperprior_noise_var=1e-3,  # this has numerical stability implications
         normalize_data: bool = True,
         normalizer: DataNormalizer = None,
-        minibatch_at_dataset_level: bool = False, # if True, we can vectorize the loop ranging over the tasks
-        dataset_batch_size: Optional[int] = None, # if None, and minibatch_at_dataset_level is True, then the datasets have to have the same size
+        minibatch_at_dataset_level: bool = False,  # if True, we can vectorize the loop ranging over the tasks
+        dataset_batch_size: Optional[
+            int
+        ] = None,  # if None, and minibatch_at_dataset_level is True, then the datasets have to have the same size
         random_state: jax.random.PRNGKey = None,
     ):
         super().__init__(
@@ -64,7 +66,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             num_tasks,
             flatten_ys=True,
             minibatch_at_dataset_level=minibatch_at_dataset_level,
-            dataset_batch_size=dataset_batch_size
+            dataset_batch_size=dataset_batch_size,
         )
 
         assert isinstance(domain, ContinuousDomain) or isinstance(domain, DiscreteDomain)
@@ -129,8 +131,8 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             n = num_tasks
             m = xs.shape[0]
             return (
-                    -mll / (task_batch_size * m)
-                    + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
+                -mll / (task_batch_size * m)
+                + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
             )
 
         def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
@@ -142,6 +144,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             return loss
 
         target_post_prob_vmap_array = jax.vmap(target_post_prob_one_task, in_axes=(None, 0, 0, 0))
+
         def target_post_prob_vmap(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
             """meta_xs_batch is a python list of jnp.arrays"""
             keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
@@ -183,11 +186,22 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
     def _sample_measurement_set(self, k, xs_train):
         if self.train_data_in_kl:
-            raise NotImplementedError
-            # n_train_x = min(xs_train.shape[0], self.num_samples_kl // 2)
-            # n_rand_x = self.num_samples_kl - n_train_x
-            # idx_rand = np.random.choice(xs_train.shape[0], n_train_x)
-            # xs_kl = torch.cat([xs_train[idx_rand], self.domain_dist.sample((n_rand_x,))], dim=0)
+            # do not use more than half of the training points for the functional kl
+            n_train_x = min(
+                xs_train.shape[0], self.num_samples_kl // 2
+            )  # number of samples from inside the train set
+            n_outside_x = self.num_samples_kl - n_train_x  # number of samples from domain
+            k, indices_key = jax.random.split(k)
+            idx_rand_train = jax.random.choice(
+                k, xs_train.shape[0], (n_train_x,)
+            )  # choose n indices for the train set,  np.random.choice(xs_train.shape[0], n_train_x)
+            xs_kl = jnp.concatenate(
+                [
+                    xs_train[idx_rand_train],  # already normalized
+                    self.domain_dist.sample(indices_key, (n_outside_x,)) / self._normalizer.x_std[None, :],
+                ],
+                axis=0,
+            )
         else:
             xs_kl = self.domain_dist.sample(k, (self.num_samples_kl,)) / self._normalizer.x_std[None, :]
 
@@ -215,7 +229,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         def compute_kl_with_noise(noise):
             # computes the kl divergence between hyperprior and hyperposterior, by adding a little diagonal noise to the
             # hyperprior
-            diagonal_noise = inject_noise_var * jnp.eye(self.num_samples_kl, self.num_samples_kl)
+            diagonal_noise = noise * jnp.eye(self.num_samples_kl, self.num_samples_kl)
             covar_with_noise = hyperprior.covariance_matrix + diagonal_noise
             hyperprior_with_noise = MultivariateNormal(hyperprior.mean, covar_with_noise)
             kl = multivariate_kl(hyperposterior, hyperprior_with_noise)
@@ -280,6 +294,7 @@ if __name__ == "__main__":
             weight_decay=weight_decay,
             task_batch_size=5,
             num_tasks=num_train_tasks,
+            train_data_in_kl=True,
             covar_module="NN",
             mean_module="NN",
             mean_nn_layers=NN_LAYERS,

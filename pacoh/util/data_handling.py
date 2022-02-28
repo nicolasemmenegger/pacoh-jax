@@ -67,18 +67,18 @@ class DataNormalizer:
     @classmethod
     def from_stats_dict(cls, stats_dict, normalize_data=True, flatten_ys=False):
         # determine input dim
-        assert stats_dict['x_mean'].shape == stats_dict['x_std'].shape and stats_dict['x_mean'].ndim == 1
-        input_dim = stats_dict['x_mean'].shape[0]
+        assert stats_dict["x_mean"].shape == stats_dict["x_std"].shape and stats_dict["x_mean"].ndim == 1
+        input_dim = stats_dict["x_mean"].shape[0]
 
         # determine output dim
-        y_mean, y_std = jnp.array(stats_dict['y_mean']), jnp.array(stats_dict['y_std'])
+        y_mean, y_std = jnp.array(stats_dict["y_mean"]), jnp.array(stats_dict["y_std"])
         assert y_mean.shape == y_std.shape and y_mean.ndim in [0, 1]
         output_dim = 1 if y_mean.ndim == 0 else y_mean.shape[0]
 
         # initialize normalizer object and set values
         normalizer = cls(input_dim, output_dim, normalize_data=normalize_data, flatten_ys=flatten_ys)
-        normalizer.x_mean = stats_dict['x_mean']
-        normalizer.x_std = stats_dict['x_std']
+        normalizer.x_mean = stats_dict["x_mean"]
+        normalizer.x_std = stats_dict["x_std"]
         normalizer.y_mean = y_mean
         normalizer.y_std = y_std
         return normalizer
