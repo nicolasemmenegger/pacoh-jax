@@ -238,8 +238,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 if __name__ == "__main__":
     from jax.config import config
 
-    config.update("jax_debug_nans", True)
-    config.update("jax_disable_jit", False)
+    config.update("jax_debug_nans", False)
+    config.update("jax_disable_jit", True)
 
     from experiments.data_sim import SinusoidDataset
 

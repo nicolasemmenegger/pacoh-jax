@@ -34,8 +34,9 @@ class JAXGaussianLikelihood(hk.Module):
                 loc=posterior.loc, covariance_matrix=cov_with_noise
             )
         elif is_diagonal_gaussian_dist(posterior):
-            scale = jnp.sqrt(jnp.square(posterior.scale) + self.variance())
-            return get_diagonal_gaussian(posterior.base_dist.loc, scale)
+            scale = jnp.sqrt(posterior.variance + self.variance())
+            diag = get_diagonal_gaussian(posterior.mean, scale)
+            return diag
         else:
             raise ValueError(
                 "posterior should be either a multivariate diagonal, full covariance gaussian or an "

@@ -2,7 +2,7 @@ import functools
 
 import numpyro.distributions
 from numpyro.distributions import MultivariateNormal
-from pacoh.util.distributions import get_diagonal_gaussian
+from pacoh.util.distributions import get_diagonal_gaussian, diagonalize_gaussian
 
 from jax import numpy as jnp
 from jax.scipy.linalg import cho_solve, cho_factor
@@ -74,7 +74,7 @@ class JAXExactGP:
 
                 return numpyro.distributions.MultivariateNormal(mean, cov)
             else:
-                raise NotImplementedError
+                raise NotImplementedError  # TODO try to return something else here directly
 
                 # return numpyro.Independent()
 
@@ -90,7 +90,8 @@ class JAXExactGP:
             return self.prior(xs_test)
 
     def pred_dist(self, xs_test):
-        """prediction with noise"""
+        """ Prediction with noise.
+        """
         predictive_dist_noiseless = self.posterior(xs_test)
         return self.likelihood(predictive_dist_noiseless)
 
