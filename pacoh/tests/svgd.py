@@ -9,8 +9,8 @@ from jax import numpy as jnp
 from pacoh.models.vanilla_bnn_svgd import BayesianNeuralNetworkSVGD
 from pacoh.modules.kernels import pytree_rbf_set, rbf_cov, pytree_rbf, get_pytree_rbf_fn
 from pacoh.tests.utils import get_simple_sinusoid_dataset
-from pacoh.util.tree import pytree_unstack, broadcast_params
-from pacoh.util.typing import Tree
+from pacoh.util.tree_util import pytree_unstack, broadcast_params
+from pacoh.util.typing_util import Tree
 
 
 class TreeTestCase(unittest.TestCase):

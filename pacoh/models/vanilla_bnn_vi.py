@@ -17,7 +17,7 @@ from pacoh.util.constants import (
     POSITIVE_PARAMETER_NAME,
 )
 from pacoh.util.initialization import initialize_batched_model
-from pacoh.util.tree import Tree
+from pacoh.util.tree_util import Tree
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 
 

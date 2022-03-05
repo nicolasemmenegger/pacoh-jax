@@ -14,7 +14,7 @@ from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel
 from pacoh.util.initialization import initialize_model_with_state, initialize_optimizer
-from pacoh.util.tree import pytree_unstack
+from pacoh.util.tree_util import pytree_unstack
 
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):

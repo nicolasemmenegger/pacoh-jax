@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import haiku as hk
 import optax
 
-from pacoh.util.tree import pytree_unstack
+from pacoh.util.tree_util import pytree_unstack
 
 
 def _call_init(

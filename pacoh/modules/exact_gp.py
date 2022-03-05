@@ -66,15 +66,15 @@ class JAXExactGP:
             ys_cent = self._ys_centered(xs, ys).flatten()
             mean = self.mean_module(xs_test).flatten() + test_train_cov @ cho_solve((chol, True), ys_cent)
 
+            cov = self.cov_set_set(xs_test, xs_test)
+            cov -= test_train_cov @ cho_solve((chol, True), test_train_cov.T)
+            assert cov.ndim == 2
+
             if return_full_covariance:
                 # full covariance information
-                cov = self.cov_set_set(xs_test, xs_test)
-                cov -= test_train_cov @ cho_solve((chol, True), test_train_cov.T)
-                assert cov.ndim == 2
-
                 return numpyro.distributions.MultivariateNormal(mean, cov)
             else:
-                raise NotImplementedError  # TODO try to return something else here directly
+                return get_diagonal_gaussian(mean, jnp.diag(cov), 1)
 
                 # return numpyro.Independent()
 
@@ -92,7 +92,7 @@ class JAXExactGP:
     def pred_dist(self, xs_test):
         """ Prediction with noise.
         """
-        predictive_dist_noiseless = self.posterior(xs_test)
+        predictive_dist_noiseless = self.posterior(xs_test, return_full_covariance=True)
         return self.likelihood(predictive_dist_noiseless)
 
     def prior(self, xs, return_full_covariance=True):

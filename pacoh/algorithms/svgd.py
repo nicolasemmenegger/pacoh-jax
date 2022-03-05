@@ -12,7 +12,7 @@ from pacoh.modules.kernels import (
     pytree_rbf_set,
     get_pytree_rbf_fn,
 )
-from pacoh.util.tree import Tree, pytree_sum, pytree_shape, pytree_unstack
+from pacoh.util.tree_util import Tree, pytree_sum, pytree_shape, pytree_unstack
 
 
 class SVGD:

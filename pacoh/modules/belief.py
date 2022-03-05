@@ -5,7 +5,7 @@ import numpyro
 from jax import numpy as jnp
 import haiku as hk
 
-from pacoh.util.tree import Tree, pytree_sum
+from pacoh.util.tree_util import Tree, pytree_sum
 
 
 # We make this a namedtuple so that we can use it as a pytree

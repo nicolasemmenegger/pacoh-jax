@@ -6,7 +6,7 @@ import jax
 from pacoh.modules.common import PositiveParameter
 from jax import numpy as jnp
 
-from pacoh.util.tree import pytree_sum
+from pacoh.util.tree_util import pytree_sum
 
 
 def rbf_cov(x1, x2, ls_param, os_param):

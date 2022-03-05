@@ -26,7 +26,7 @@ from pacoh.util.initialization import (
 
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
 from pacoh.modules.batching import multi_transform_and_batch_module_with_state
-from pacoh.util.tree import pytree_unstack
+from pacoh.util.tree_util import pytree_unstack
 
 construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(
     construct_gp_base_learner,
@@ -137,7 +137,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
         # c) initialize the the state of the hyperprior and of the (hyper posterior) particles
         self._rng, init_key = jax.random.split(self._rng)
-        params, template, self._empty_states = initialize_batched_model_with_state(
+        self.particles, template, self._empty_states = initialize_batched_model_with_state(
             init, num_particles, init_key, (self._task_batch_size, input_dim)
         )
         self._single_empty_state = pytree_unstack(self._empty_states)
@@ -166,8 +166,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
         self._rng, particle_sample_key = jax.random.split(self._rng)
 
-        self.particles = GaussianBelief.rsample(self.hyperprior, particle_sample_key, num_particles)
-        # self.particles = hk.data_structures.map(foo, self.particles)
+        """ UNCOMMENT this if you want some random initialisation according to the hyperprior """
+        # self.particles = GaussianBelief.rsample(self.hyperprior, particle_sample_key, num_particles)
 
         # d) setup kernel forward function and the base learner partition function
         if svgd_kernel != "RBF":  # elif kernel == 'IMQ':
@@ -239,7 +239,7 @@ if __name__ == "__main__":
     from jax.config import config
 
     config.update("jax_debug_nans", False)
-    config.update("jax_disable_jit", True)
+    config.update("jax_disable_jit", False)
 
     from experiments.data_sim import SinusoidDataset
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":
             feature_dim=2,
             svgd_kernel_bandwidth=1000.0,
             kernel_nn_layers=NN_LAYERS,
-            num_particles=20,
+            num_particles=8,
             learn_likelihood=True,
         )
 

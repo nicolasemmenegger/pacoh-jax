@@ -4,7 +4,7 @@ import jax
 from jax import numpy as jnp
 import numpyro
 
-from pacoh.util.typing import Tree
+from pacoh.util.typing_util import Tree
 
 
 def pytrees_stack(pytrees: Collection[Tree], axis=0):
