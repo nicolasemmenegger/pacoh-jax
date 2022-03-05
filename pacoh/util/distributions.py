@@ -6,6 +6,8 @@ from jax.scipy.linalg import cho_solve, cho_factor
 from numpyro import distributions as npd
 from numpyro.distributions import Categorical, MixtureSameFamily, Independent, Normal, MultivariateNormal
 
+from pacoh.util.typing_util import Tree
+
 
 def get_mixture(pred_dists, n):
     cat = Categorical(probs=jnp.ones((n,)) / n)
@@ -96,7 +98,7 @@ def _unflatten_leaf(cls_id, vmapped_output, aux_converted):
         return cls.tree_unflatten(aux, vmapped_output)
 
 
-def vmap_dist(f: Callable[[Any], npd.Distribution], in_axes=0, out_axes=0, axis_name=None):
+def vmap_dist(f: Callable[[Any], Tree], in_axes=0, out_axes=0, axis_name=None):
     """Helper function that vmaps a function that may return a distribution as output."""
     def flat_f(*args, **kwargs):
         """ Returns a 3-tuple of trees:
@@ -111,8 +113,11 @@ def vmap_dist(f: Callable[[Any], npd.Distribution], in_axes=0, out_axes=0, axis_
         flattened_leaves_tree = jax.tree_map(_flatten_leaf,
                                              output_tree,
                                              is_leaf=lambda l: isinstance(l, npd.Distribution))
+
         # need to know where the leaves are at to unstack the tree correctly
         are_leaves = jax.tree_map(lambda _: True, output_tree, is_leaf=lambda l: isinstance(l, npd.Distribution))
+
+        # TODO possibly insert check whether out_axes is valid and does not go into distribution leaves ??
         return _unstack_flat_leaf_pytrees(are_leaves, flattened_leaves_tree)
 
     vmapped = vmap(
@@ -130,54 +135,3 @@ def vmap_dist(f: Callable[[Any], npd.Distribution], in_axes=0, out_axes=0, axis_
         return unflat
 
     return unflattened
-
-
-if __name__ == "__main__":
-    def get_dist(mean):
-        return Independent(Normal(mean, jnp.ones_like(mean)), 2)
-
-    def get_var(mean):
-        return Independent(Normal(mean, jnp.ones_like(mean)), 2).variance
-
-    def get_nondiag_dist(mean):
-        return MultivariateNormal(
-            mean, jnp.diag(jnp.ones_like(mean)) + 0.001 * jnp.ones((mean.shape[0], mean.shape[0]))
-        )
-
-    def get_dist_and_var(mean):
-        dist = get_dist(mean)
-        return dist, dist.variance
-
-    get_dists = vmap_dist(get_dist)
-    get_vars = vmap_dist(get_var)
-    get_nondiag_dists = vmap_dist(get_nondiag_dist)
-    key = jax.random.PRNGKey(42)
-    mean = jax.random.normal(key, (8, 1))
-    means = jax.random.normal(key, (3, 8, 1))
-
-    simple_dist = get_dist(mean)  ##  .get_numpyro_distribution()
-    batched_dist = get_dists(means)  ## .get_numpyro_distribution()
-
-    simple_var = get_var(mean)  ##  .get_numpyro_distribution()
-    batched_vars = get_vars(means)  ## .get_numpyro_distribution()
-
-    multi_dist = get_nondiag_dist(mean.flatten())
-    multi_dists = get_nondiag_dists(means.reshape((3, 8)))
-
-    multiple_outputs = vmap_dist(get_dist_and_var, out_axes=(0, 0))(means)
-
-    print("vmapped diagonal normal distributions: ")
-    print(simple_dist.batch_shape, "&", simple_dist.event_shape)  # prints: () & (8,1)
-    print(batched_dist.batch_shape, "&", batched_dist.event_shape)  # Should print: (3,) & (8,1)
-
-    print("can still vmap functions returning something else: ")
-    print(simple_var.shape, batched_vars.shape)
-
-    print("can also return multivariate normals in a batched manner")
-    print(multi_dist.batch_shape, "&", multi_dist.event_shape)  # prints: () & (8,)
-    print(multi_dists.batch_shape, "&", multi_dists.event_shape)  # Should print: (3,) & (8,)
-    print(multi_dists.sample(jax.random.PRNGKey(42)))
-
-    print("can also return arbitary pytrees where some of the leaves are distributios")
-    print(multiple_outputs[0].batch_shape, "&", multiple_outputs[0].event_shape)
-    print(multiple_outputs[1].shape)
