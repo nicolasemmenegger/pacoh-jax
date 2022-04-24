@@ -23,6 +23,8 @@ class JAXRBFKernel(JAXKernel):
         input_dim,
         length_scale=1.0,
         output_scale=1.0,
+        log_ls_variance=0.0,  # 0.0 corresponds to deterministic initialization of the lengthscale
+        log_os_variance=0.0,  # 0.0 corresponds to deterministic initialization of the outputscale
         length_scale_constraint_gt=0.0,
         output_scale_constraint_gt=0.0,
     ):
@@ -30,12 +32,14 @@ class JAXRBFKernel(JAXKernel):
         self.input_dim = input_dim
 
         self.output_scale = PositiveParameter(
-            initial_value=output_scale,
+            mean=output_scale,
+            log_variance=log_os_variance,
             boundary_value=output_scale_constraint_gt,
             name="OutputScale",
         )
         self.length_scale = PositiveParameter(
-            initial_value=length_scale,
+            mean=length_scale,
+            log_variance=log_ls_variance,
             boundary_value=length_scale_constraint_gt,
             name="LengthScale",
         )
@@ -83,12 +87,14 @@ class JAXRBFKernelNN(JAXKernel):
         self.feature_dim = feature_dim
 
         self.output_scale = PositiveParameter(
-            initial_value=output_scale,
+            mean=output_scale,
+            log_variance=0.0,
             boundary_value=output_scale_constraint_gt,
             name="OutputScale",
         )
         self.length_scale = PositiveParameter(
-            initial_value=length_scale,
+            mean=length_scale,
+            log_variance=0.0,
             boundary_value=length_scale_constraint_gt,
             name="LengthScale",
         )

@@ -1,25 +1,50 @@
+import jax
 from jax import numpy as jnp
 import haiku as hk
 
 
-class PositiveParameter(hk.Module):
-    """A simple module storing a positive parameter."""
+def _softplus_inverse(x):
+    return jnp.log(jnp.exp(x) - 1.)
 
-    def __init__(self, initial_value, boundary_value=0.0, name="PositiveParameter"):
+
+class PositiveParameter(hk.Module):
+    """A simple module storing a positive parameter. Can specify a mean and variance
+    """
+
+    def __init__(self, mean=None, log_variance=0.0, boundary_value=0.0, shape=None, name="PositiveParameter"):
+        """
+        :param mean: A float specifying the mean of the module
+        :param log_variance: A float specifying the variance in log_scale with which we initialize
+            if 0.0, will be deterministically initialized
+        :param boundary_value:
+        :param name: name of the module
+        """
         super().__init__(name=name)
-        self.raw_init = jnp.log(initial_value - boundary_value)
+        if mean is None:
+            self.log_scale_mean = 0
+        else:
+            self.log_scale_mean = _softplus_inverse(mean - boundary_value)
+        self.log_scale_var = log_variance
         self.boundary_value = boundary_value
-        if isinstance(initial_value, float):
+        if shape is not None:
+            self.shape = shape
+        # otherwise infer shape from mean
+        elif isinstance(mean, float) or mean is None:
             self.shape = []
         else:
-            self.shape = initial_value.shape
+            self.shape = mean.shape
+
 
     def __call__(self):
-        exponentiated = jnp.exp(
+        if self.log_scale_var == 0.:
+            initializer = hk.initializers.Constant(self.log_scale_mean)
+        else:
+            initializer = hk.initializers.RandomNormal(self.log_scale_mean, self.log_scale_var)
+        exponentiated = jax.nn.softplus(
             hk.get_parameter(
                 "__positive_log_scale_param",
                 shape=self.shape,
-                init=hk.initializers.Constant(self.raw_init),
+                init=initializer
             )
         )
         return exponentiated + self.boundary_value

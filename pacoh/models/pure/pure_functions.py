@@ -19,13 +19,15 @@ from pacoh.util.constants import MLP_MODULE_NAME
 
 
 def construct_vanilla_gp_forward_fns(
-    input_dim, output_dim, kernel_outputscale, kernel_lengthscale, likelihood_variance
+    input_dim, output_dim,
+    kernel_outputscale, kernel_lengthscale, likelihood_variance,
+    kernel_log_os_var=0.0, kernel_log_ls_var=0., likelihood_log_var=0.0
 ):
     def factory():
         # Initialize the mean module with a zero-mean, and use an RBF kernel with *no* learned feature map
         mean_module = JAXZeroMean(output_dim=output_dim)
-        covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale)
-        likelihood = JAXGaussianLikelihood(likelihood_variance)
+        covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale, kernel_log_ls_var, kernel_log_os_var)
+        likelihood = JAXGaussianLikelihood(likelihood_variance, likelihood_log_var)
         gp = JAXExactGP(mean_module, covar_module, likelihood)
 
         # choose gp.pred_dist as the template function, as it includes the likelihood
@@ -84,6 +86,8 @@ def construct_gp_base_learner(
     kernel_nn_layers,
     learn_likelihood=True,
     initial_noise_std=1.0,
+    kernel_length_scale=1.0,
+    kernel_output_scale=1.0
 ):
     def factory():
         """The arguments here are what _setup_gp_prior had."""
@@ -93,9 +97,9 @@ def construct_gp_base_learner(
                 "learn_kernel",
                 "both",
             ], "neural network parameters must be learned"
-            covar_module = JAXRBFKernelNN(input_dim, feature_dim, layer_sizes=kernel_nn_layers)
+            covar_module = JAXRBFKernelNN(input_dim, feature_dim, layer_sizes=kernel_nn_layers, length_scale=kernel_length_scale, output_scale=kernel_output_scale)
         elif covar_option == "SE":
-            covar_module = JAXRBFKernel(input_dim)
+            covar_module = JAXRBFKernel(input_dim, length_scale=kernel_length_scale, output_scale=kernel_output_scale)
         elif callable(covar_option):
             covar_module = covar_option()
             assert isinstance(covar_module, JAXKernel), "Invalid covar_module option"
@@ -123,6 +127,7 @@ def construct_gp_base_learner(
             output_dim=output_dim,
             variance=initial_noise_std * initial_noise_std,
             learn_likelihood=learn_likelihood,
+            variance_constraint_gt=1e-3,
         )
 
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)

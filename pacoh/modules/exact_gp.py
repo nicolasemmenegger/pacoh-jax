@@ -89,11 +89,14 @@ class JAXExactGP:
         else:
             return self.prior(xs_test)
 
-    def pred_dist(self, xs_test):
+    def pred_dist(self, xs_test, noiseless=False):
         """ Prediction with noise.
         """
         predictive_dist_noiseless = self.posterior(xs_test, return_full_covariance=True)
-        return self.likelihood(predictive_dist_noiseless)
+        if noiseless:
+            return predictive_dist_noiseless
+        else:
+            return self.likelihood(predictive_dist_noiseless)
 
     def prior(self, xs, return_full_covariance=True):
         mean = self.mean_module(xs)
@@ -113,17 +116,8 @@ class JAXExactGP:
     """ ---- training utilities ---- """
 
     def marginal_ll(self, xs, ys):
-        # computes the marginal log-likelihood of ys given xs and a posterior
-        # computed on (xs,ys). This is differentiable and uses no stats
-        ys_centered = self._ys_centered(xs, ys)
-
-        data_cov_w_noise = self._data_cov_with_noise(xs)  # more noise
-        cholesky = cho_factor(data_cov_w_noise)
-        hk.set_state("cholesky", cholesky[0])
-        hk.set_state("xs", xs)
-        hk.set_state("ys", ys)
-        alpha = cho_solve(cholesky, ys_centered)
-        ll = -0.5 * jnp.dot(ys_centered.flatten(), alpha.flatten())
-        ll -= jnp.sum(jnp.diag(cholesky[0]))  # this should be faster than trace
-        ll -= xs.shape[0] / 2.0 * jnp.log(2.0 * jnp.pi)
-        return ll
+        data_cov_w_noise = self._data_cov_with_noise(xs)  # Kernel matrix with noise on diagonal
+        ys_centered = self._ys_centered(xs, ys) # ys - prior_mean_function(xs)
+        mvn = numpyro.distributions.MultivariateNormal(jnp.zeros_like(xs.flatten()), data_cov_w_noise)
+        alt_ll = mvn.log_prob(ys_centered)
+        return alt_ll

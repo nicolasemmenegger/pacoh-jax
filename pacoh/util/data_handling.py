@@ -154,7 +154,7 @@ def normalize_predict(predict_fn):
         return_density, defaulting to the value True
     """
 
-    def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=False):
+    def normalized_predict(self, test_x, *, return_density=True, return_full_covariance=True):
         test_x_normalized = self._normalizer.handle_data(test_x)
         pred_dist = predict_fn(self, test_x_normalized)
 
@@ -174,11 +174,11 @@ def normalize_predict(predict_fn):
             )
 
         if return_full_covariance and not return_density:
-            warnings.warn(
-                "You want the full covariance but only asked for mean and std of individual "
-                + "points... return_density ignored"
-            )
-            warnings.warn("There is probably a smarter thing to do here")
+            # warnings.warn(
+            #     "You want the full covariance but only asked for mean and std of individual "
+            #     + "points... return_density ignored"
+            # )
+            # warnings.warn("There is probably a smarter thing to do here")
             return_full_covariance = False
 
         # handle full_covariance_stuff

@@ -97,6 +97,7 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         self._check_meta_data_shapes(meta_train_tuples)
         num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
         meta_train_tuples = self._normalizer.handle_meta_tuples(meta_train_tuples)
+        self.meta_train_tuples_debugging_purposes = meta_train_tuples # TODO remove
         dataloader = self._get_meta_dataloader(
             meta_train_tuples,
             self._task_batch_size,
@@ -106,10 +107,8 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         )
 
         if meta_valid_tuples is not None:
-            meta_valid_tuples_context = [(xs, ys) for xs, ys, _, __ in meta_valid_tuples]
-            meta_valid_tuples_test = [(xs, ys) for _, __, xs, ys in meta_valid_tuples]
-            meta_valid_tuples_context = self._normalizer.handle_meta_tuples(meta_valid_tuples_context)
-            meta_valid_tuples_test = self._normalizer.handle_meta_tuples(meta_valid_tuples_test)
+            meta_valid_tuples_context = [handle_batch_input_dimensionality(xs, ys) for xs, ys, _, __ in meta_valid_tuples]
+            meta_valid_tuples_test = [handle_batch_input_dimensionality(xs, ys) for _, __, xs, ys in meta_valid_tuples]
             meta_valid_tuples = [
                 (con[0], con[1], test[0], test[1])
                 for con, test in zip(meta_valid_tuples_context, meta_valid_tuples_test)

@@ -54,6 +54,9 @@ class GPRegressionVanilla(RegressionModel):
             kernel_outputscale,
             kernel_lengthscale,
             likelihood_variance,
+            kernel_log_os_var=0.,
+            kernel_log_ls_var=0.,
+            likelihood_log_var=0.,
         )
 
         # initialize model

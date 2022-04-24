@@ -5,7 +5,6 @@ import haiku as hk
 import jax.random
 import numpy as np
 import optax
-import torch
 from jax import numpy as jnp
 from numpyro.distributions import Uniform, MultivariateNormal
 
@@ -42,12 +41,12 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         num_tasks: int = None,
         lr: float = 1e-3,
         lr_decay: float = 1.0,
-        prior_weight=0.1,  # kappa
-        train_data_in_kl=False,  # whether to reuse the training set to evaluate the kl at
+        prior_factor=0.1,  # kappa
+        train_data_in_kl=True,  # whether to reuse the training set to evaluate the kl at
         num_samples_kl=20,
-        hyperprior_lengthscale=0.3,
-        hyperprior_outputscale=2.0,
-        hyperprior_noise_var=1e-3,  # this has numerical stability implications
+        hyperprior_lengthscale=0.2, # prior_lengthscale
+        hyperprior_outputscale=2.0, # prior_outputscale
+        hyperprior_noise_std=1e-3, # prior_kernel_noise
         normalize_data: bool = True,
         normalizer: DataNormalizer = None,
         minibatch_at_dataset_level: bool = False,  # if True, we can vectorize the loop ranging over the tasks
@@ -94,7 +93,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood=True,
-            initial_noise_std=1.0,
+            initial_noise_std=jax.nn.softplus(0.) + 0.001,
+            kernel_length_scale=jax.nn.softplus(0.),
+            kernel_output_scale=jax.nn.softplus(0.)
         )
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
@@ -109,7 +110,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             hyperprior_covar = JAXRBFKernel(input_dim, hyperprior_lengthscale, hyperprior_outputscale)
             hyperprior_likelihood = JAXGaussianLikelihood(
                 output_dim=output_dim,
-                variance=0.0,  # does not matter, only used for prior
+                variance=0.000001,  # does not matter, only used for prior
                 learn_likelihood=False,
             )
 
@@ -120,20 +121,23 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         hyper_init, hyper_apply = hk.transform(hyperprior_impure)
         hyper_params = initialize_model(hyper_init, None, (1, input_dim))
         self.hyperprior_marginal = functools.partial(hyper_apply, hyper_params, None)
-        self.hyperprior_noise_var = hyperprior_noise_var
+        self.hyperprior_noise_std = hyperprior_noise_std
         self._rng, sample_key = jax.random.split(self._rng)
 
         def target_post_prob_one_task(particle, key, xs, ys):
             mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
             kl = self._functional_kl(particle, key, xs)
 
-            # this is formula (3) from pacoh, and prior_weight corresponds to kappa
+            # this is formula (3) from pacoh, and prior_factor corresponds to kappa
             n = num_tasks
             m = xs.shape[0]
+
             return (
                 -mll / (task_batch_size * m)
-                + prior_weight * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
+                + prior_factor * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
             )
+
+
 
         def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
             """meta_xs_batch is a python list of jnp.arrays"""
@@ -152,8 +156,10 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
         if minibatch_at_dataset_level:
             self.target_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(target_post_prob_vmap)))
+            self.target_debugging_purposes = target_post_prob_vmap
         else:
             self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob_loop))
+            self.target_debugging_purposes = target_post_prob_loop
 
         # f-pacoh specific initialisation
         self.domain_dist = Uniform(low=domain.l, high=domain.u)
@@ -169,6 +175,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         xs_batch, ys_batch = mini_batch
         self._rng, key = jax.random.split(self._rng)
         loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch)
+        # self.target_debugging_purposes(self.particle, key, xs_batch, ys_batch)
         updates, self.optimizer_state = self.optimizer.update(grad, self.optimizer_state, self.particle)
         self.particle = optax.apply_updates(self.particle, updates)
         return loss
@@ -193,17 +200,18 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             n_outside_x = self.num_samples_kl - n_train_x  # number of samples from domain
             k, indices_key = jax.random.split(k)
             idx_rand_train = jax.random.choice(
-                k, xs_train.shape[0], (n_train_x,)
+                k, xs_train.shape[0], (n_train_x,), replace=False
             )  # choose n indices for the train set,  np.random.choice(xs_train.shape[0], n_train_x)
+            samples = self.domain_dist.sample(indices_key, (n_outside_x,))
             xs_kl = jnp.concatenate(
                 [
                     xs_train[idx_rand_train],  # already normalized
-                    self.domain_dist.sample(indices_key, (n_outside_x,)) / self._normalizer.x_std[None, :],
+                    self._normalizer.handle_data(samples)  # need normalization
                 ],
                 axis=0,
             )
         else:
-            xs_kl = self.domain_dist.sample(k, (self.num_samples_kl,)) / self._normalizer.x_std[None, :]
+            xs_kl = self._normalizer.handle_data(self.domain_dist.sample(k, (self.num_samples_kl,)))
 
         assert xs_kl.shape == (self.num_samples_kl, self.input_dim)
         return xs_kl
@@ -219,7 +227,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         # sample / construct measurement set
         xs_kl = self._sample_measurement_set(k, xs)
 
-        hyperposterior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl)
+        hyperposterior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl, True)
         hyperprior = self.hyperprior_marginal(xs_kl)
 
         assert isinstance(
@@ -229,7 +237,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         def compute_kl_with_noise(noise):
             # computes the kl divergence between hyperprior and hyperposterior, by adding a little diagonal noise to the
             # hyperprior
-            diagonal_noise = noise * jnp.eye(self.num_samples_kl, self.num_samples_kl)
+            diagonal_noise = noise * jnp.eye(xs_kl.shape[0])
             covar_with_noise = hyperprior.covariance_matrix + diagonal_noise
             hyperprior_with_noise = MultivariateNormal(hyperprior.mean, covar_with_noise)
             kl = multivariate_kl(hyperposterior, hyperprior_with_noise)
@@ -238,17 +246,19 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         # this is both differentiable and jittable
         # https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#control-flow
         # standard for loop is differentiable as condition does not depend on data
+        # WARNING: except it's apparently not...
+
+        inject_noise_std = self.hyperprior_noise_std
         kl = jnp.nan
-        inject_noise_var = self.hyperprior_noise_var
+        # kl = compute_kl_with_noise(inject_noise_std)
         for _ in range(5):
-            # this
             kl = jax.lax.cond(
                 jnp.isnan(kl),
                 lambda n: compute_kl_with_noise(n),
                 lambda _: kl,
-                inject_noise_var,
+                inject_noise_std,
             )
-            inject_noise_var *= 2
+            inject_noise_std *= 2
 
         return kl
 
@@ -257,95 +267,74 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
 
 if __name__ == "__main__":
-    from jax.config import config
+    from pacoh.bo.meta_environment import RandomMixtureMetaEnv
 
-    config.update("jax_debug_nans", False)
-    config.update("jax_disable_jit", False)
-
-    from experiments.data_sim import SinusoidDataset
-
-    data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
+    meta_env = RandomMixtureMetaEnv(random_state=np.random.RandomState(29))
     num_train_tasks = 20
-    meta_train_data = data_sim.generate_meta_train_data(n_tasks=num_train_tasks, n_samples=10)
-    meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=160)
+    meta_train_data = meta_env.generate_uniform_meta_train_data(num_tasks=num_train_tasks, num_points_per_task=10)
+    meta_test_data = meta_env.generate_uniform_meta_valid_data(num_tasks=50, num_points_context=10, num_points_test=160)
 
-    NN_LAYERS = (32, 32, 32, 32)
+    NN_LAYERS = (32, 32)
 
-    plot = False
+    plot = True
     from matplotlib import pyplot as plt
 
     if plot:
         for x_train, y_train in meta_train_data:
             plt.scatter(x_train, y_train)
-        plt.title("sample from the GP prior")
+        plt.title('sample from the GP prior')
         plt.show()
+
     """ 2) Classical mean learning based on mll """
+    print('\n ---- GPR mll meta-learning ---- ')
 
-    print("\n ---- GPR mll meta-learning ---- ")
+    prior_factor = 1e-2  # This is larger than in the original codebase by a factor of 10
+    gp_model = F_PACOH_MAP_GP(1, 1, domain=meta_env.domain, random_state=jax.random.PRNGKey(3425),
+                             num_tasks=num_train_tasks,
+                             weight_decay=1e-4, prior_factor=prior_factor,
+                             task_batch_size=2, covar_module='NN', mean_module='NN', lr=1e-3,
+                             mean_nn_layers=NN_LAYERS, kernel_nn_layers=NN_LAYERS)
+    itrs = 0
+    for i in range(10):
+        def mapper(name, pname, val, length_scale, output_scale, likelihood_noise):
+            if "likelihood" in name:
+                return val*0.0+jnp.log(likelihood_noise)
+            elif "LengthScale" in name:
+                return val*0.0+jnp.log(length_scale)
+            elif "OutputScale" in name:
+                return val*0.0+jnp.log(output_scale)
+            else:
+                raise NotImplementedError("is problem")
 
-    torch.set_num_threads(2)
+        def newparticle(particle, length_scale, output_scale, likelihood_noise):
+            return hk.data_structures.map(functools.partial(mapper, length_scale=length_scale, output_scale=output_scale, likelihood_noise=likelihood_noise), particle)
 
-    for weight_decay in [0.5]:
-        pacoh_map = F_PACOH_MAP_GP(
-            1,
-            1,
-            ContinuousDomain(jnp.ones((1,)) * -6, jnp.ones((1,)) * 6),
-            learning_mode="both",
-            weight_decay=weight_decay,
-            task_batch_size=5,
-            num_tasks=num_train_tasks,
-            train_data_in_kl=True,
-            covar_module="NN",
-            mean_module="NN",
-            mean_nn_layers=NN_LAYERS,
-            feature_dim=2,
-            kernel_nn_layers=NN_LAYERS,
-            minibatch_at_dataset_level=False,
-        )
+        # gp_model.particle = newparticle(gp_model.particle, 0.6931, 0.6931, 0.6941)
 
-        itrs = 0
-        print("---- weight-decay =  %.4f ----" % weight_decay)
+        gp_model.meta_fit(meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=200)
+        itrs += 200
 
-        for i in range(40):
-            n_iter = 500
-            pacoh_map.meta_fit(meta_train_data, meta_test_data, log_period=1000, num_iter_fit=n_iter)
 
-            itrs += n_iter
+        task_xs, task_ys = gp_model.meta_train_tuples_debugging_purposes[0]
 
-            x_plot = np.linspace(-5, 5, num=150)
-            x_context, y_context, x_test, y_test = meta_test_data[1]
+        x_plot = np.linspace(meta_env.domain.l, meta_env.domain.u, num=150)
+        x_context, t_context, x_test, y_test = meta_test_data[0]
+        pred_mean, pred_std = gp_model.meta_predict(x_context, t_context, x_plot, return_density=False)
+        ucb, lcb = (pred_mean + 2 * pred_std).flatten(), (pred_mean - 2 * pred_std).flatten()
 
-            # prior prediction
-            pacoh_map._clear_data()
-            prior_lcb, prior_ucb = pacoh_map.confidence_intervals(x_plot)
-            prior_mean, prior_std = pacoh_map.predict(
-                x_plot, return_density=False, return_full_covariance=False
-            )
+        plt.scatter(x_test, y_test)
+        plt.scatter(x_context, t_context)
 
-            # posterior prediction
-            pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
-            pred_mean = pred_dist.mean
-            lcb, ucb = pacoh_map.confidence_intervals(x_plot)
+        print("AFTER ITERATION", itrs)
+        print("first dataset", gp_model.meta_eval(x_context, t_context, x_test, y_test))
+        print("all datasets", gp_model.eval_datasets(meta_test_data))
+        print("params", jax.tree_map(jax.nn.softplus, gp_model.particle))
 
-            # plot data
-            plt.scatter(x_test, y_test, color="green")  # the unknown target test points
-            plt.scatter(x_context, y_context, color="red")  # the target train points
 
-            # plot posterior
-            plt.plot(x_plot, pred_mean, color="blue")  # the curve we fitted based on the target test points
-            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.15, color="blue")
 
-            # plot prior
-            plt.plot(
-                x_plot, prior_mean, color="orange"
-            )  # the curve we fitted based on the target test points
-            plt.fill_between(
-                x_plot,
-                prior_lcb.flatten(),
-                prior_ucb.flatten(),
-                alpha=0.15,
-                color="orange",
-            )
 
-            plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
-            plt.show()
+        plt.plot(x_plot, pred_mean)
+        plt.fill_between(x_plot.flatten(), lcb, ucb, alpha=0.2)
+        plt.title('GPR meta mll (prior_factor =  %.4f) itrs = %i' % (prior_factor, itrs))
+        plt.show()
+
