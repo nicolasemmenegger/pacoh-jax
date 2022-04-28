@@ -11,9 +11,8 @@ from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel, JAXRBFKernelNN, JAXKernel
 from pacoh.modules.means import JAXConstantMean, JAXZeroMean, JAXMean
 from pacoh.models.pure.pure_interfaces import (
-    VanillaGPInterface,
-    VanillaBNNVIInterface,
-    BaseLearnerInterface,
+    NNBaseLearner,
+    GPBaseLearner,
 )
 from pacoh.util.constants import MLP_MODULE_NAME
 
@@ -31,7 +30,9 @@ def construct_vanilla_gp_forward_fns(
         gp = JAXExactGP(mean_module, covar_module, likelihood)
 
         # choose gp.pred_dist as the template function, as it includes the likelihood
-        return gp.init_fn, VanillaGPInterface(fit_fn=gp.fit, pred_dist_fn=gp.pred_dist, prior_fn=gp.prior)
+        return gp.init_fn, GPBaseLearner(base_learner_fit=gp.fit,
+                                         base_learner_predict=gp.pred_dist,
+                                         base_learner_mll_estimator=gp.marginal_ll)
 
     return factory
 
@@ -61,7 +62,7 @@ def construct_bnn_forward_fns(
 
         def pred_dist(xs):
             means = nn(xs)
-            return likelihood_module(means)  # this adds heteroscedastic variance to all datapoints
+            return likelihood_module(means)  # this adds homoscedastic variance to all data points
 
         def log_prob(ys_true, ys_pred):
             return likelihood_module.log_prob(ys_true, ys_pred)
@@ -70,7 +71,7 @@ def construct_bnn_forward_fns(
             res = nn(xs)
             return res
 
-        return pred_dist, VanillaBNNVIInterface(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
+        return pred_dist, NNBaseLearner(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
 
     return factory
 
@@ -139,7 +140,7 @@ def construct_gp_base_learner(
         def base_learner_mll_estimator(xs, ys):
             return base_learner.marginal_ll(xs, ys)
 
-        return init_fn, BaseLearnerInterface(
+        return init_fn, GPBaseLearner(
             base_learner_fit=base_learner_fit,
             base_learner_predict=base_learner_predict,
             base_learner_mll_estimator=base_learner_mll_estimator,

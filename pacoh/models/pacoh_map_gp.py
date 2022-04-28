@@ -1,20 +1,17 @@
-from typing import Callable, Collection, Union
+from typing import Callable, Collection, Union, Optional
 
 import haiku as hk
 import jax.random
 import numpy as np
 import optax
 import torch
-from jax import numpy as jnp
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
-from pacoh.modules.belief import GaussianBelief, GaussianBeliefState
 from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.modules.means import JAXMean
 from pacoh.modules.kernels import JAXKernel
 from pacoh.util.initialization import initialize_model_with_state, initialize_optimizer
-from pacoh.util.tree_util import pytree_unstack
 
 
 class PACOH_MAP_GP(RegressionModelMetaLearned):
@@ -25,19 +22,42 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         learning_mode: str = "both",
         learn_likelihood: bool = True,
         weight_decay: float = 0.0,
-        feature_dim: int = 2,
         covar_module: Union[str, Callable[[], JAXKernel]] = "NN",
         mean_module: Union[str, Callable[[], JAXMean]] = "NN",
         mean_nn_layers: Collection[int] = (32, 32),
         kernel_nn_layers: Collection[int] = (32, 32),
+        feature_dim: int = 2,
         task_batch_size: int = 5,
         num_tasks: int = None,
         lr: float = 1e-3,
         lr_decay: float = 1.0,
         normalize_data: bool = True,
-        normalizer: DataNormalizer = None,
-        random_state: jax.random.PRNGKey = None,
+        normalizer: Optional[DataNormalizer] = None,
+        random_state: Optional[jax.random.PRNGKey] = None,
     ):
+        """
+        :param input_dim: The dimensionality of input points
+        :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
+        :param learning_mode: Can be one of "learn_mean", "learn_kernel", "both", or "vanilla_gp"
+        :param learn_likelihood: Whether to learn the (homoscedastic) variance of the noise
+        :param weight_decay: Weight decay on the parameters. Corresponds to setting a (certain)
+            gaussian hyperprior on the parameters of the mean, kernel. We do not apply weight_decay
+            on the likelihood parameters, since this coresponds to letting the noise go to softplus(0.0) = 0.69
+        :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
+        :param mean_module: Can be "NN", "constant", "zero", or a Mean
+        :param mean_nn_layers: Size specifications of the hidden (!) layers used in the mean feature maps
+        :param kernel_nn_layers: Size specifications of the hidden (!) layers used in the kernel feature maps
+        :param feature_dim: In case covar_module is NN, feature_dim denotes the dimensionality of the output
+            of the MLP that is then fed through a RBF kernel
+        :param task_batch_size: The number of tasks in a batch
+        :param num_tasks: The number of tasks we intend to train on. Required for jax.jit reasons
+        :param lr: The learning rate of the AdamW optimizer
+        :param lr_decay: The learning rate decay. 1.0 means no decay
+        :param normalize_data: Whether to do everything with normalized data
+        :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
+            training data
+        :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
+        """
         super().__init__(
             input_dim,
             output_dim,
@@ -83,10 +103,8 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         )
         self.state = self.empty_state = empty_state
 
-        def mean_std_map(*_):
-            return 0.0, 1.0
 
-        self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, self.particle)
+        # self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, self.particle)
 
         self._rng, sample_key = jax.random.split(self._rng)
         # self.particle = pytree_unstack(GaussianBelief.rsample(self.hyperprior, sample_key, 1))[0]

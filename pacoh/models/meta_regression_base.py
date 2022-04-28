@@ -77,14 +77,10 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         num_iter_fit=None,
     ):
         """
-        :param meta_train_tuples:
-        :param meta_valid_tuples:
-        :param log_period:
-        :param num_iter_fit:
-        :param minibatch_at_dataset_level: if this is true, we vectorize over the tasks as well.
-            In this case the task batches need to be all of the same size, which can either be achieved by making all the
-            meta-datasets the same size, or by minibatching both at the task AND dataset level (by default, we minibatch
-            at the task level).
+        :param meta_train_tuples: The train tuples on which to train
+        :param meta_valid_tuples: Provide validation tuples for logging
+        :param log_period: How often to log the results
+        :param num_iter_fit: The number of iterations to fit. If none, will use the instance attribute
         """
         assert (meta_valid_tuples is None) or (
             all([len(valid_tuple) == 4 for valid_tuple in meta_valid_tuples])
@@ -97,7 +93,6 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         self._check_meta_data_shapes(meta_train_tuples)
         num_iter_fit = self._num_iter_meta_fit if num_iter_fit is None else num_iter_fit
         meta_train_tuples = self._normalizer.handle_meta_tuples(meta_train_tuples)
-        self.meta_train_tuples_debugging_purposes = meta_train_tuples # TODO remove
         dataloader = self._get_meta_dataloader(
             meta_train_tuples,
             self._task_batch_size,

@@ -5,7 +5,7 @@ import haiku as hk
 import numpy as np
 
 from pacoh.models.pure.pure_functions import construct_bnn_forward_fns
-from pacoh.models.pure.pure_interfaces import VanillaBNNVIInterface
+from pacoh.models.pure.pure_interfaces import NNBaseLearner
 from pacoh.models.regression_base import RegressionModel
 from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.util.distributions import get_mixture
@@ -26,6 +26,7 @@ def construct_bnn_forward_fn(
     likelihood_initial_std,
     learn_likelihood=True,
 ):
+    # this is only here for convenience. Not the same as construct_bnn_forward_fns
     def factory():
         likelihood_module = JAXGaussianLikelihood(
             variance=likelihood_initial_std * likelihood_initial_std,
@@ -49,7 +50,7 @@ def construct_bnn_forward_fn(
             res = nn(xs)
             return res
 
-        return pred_dist, VanillaBNNVIInterface(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
+        return pred_dist, NNBaseLearner(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
 
     return factory
 
@@ -194,7 +195,7 @@ if __name__ == "__main__":
 
     print(nn._xs_data)
     print(nn._ys_data)
-    n_iter_fit = 200  # 2000
+    n_iter_fit = 200
     for i in range(200):
         nn.fit(log_period=100, num_iter_fit=n_iter_fit, xs_val=x_plot, ys_val=y_val)
 

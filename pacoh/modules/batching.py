@@ -11,7 +11,7 @@ from haiku import (
 from jax import numpy as jnp, jit
 import haiku as hk
 
-from pacoh.models.pure.pure_interfaces import BaseLearnerInterface
+from pacoh.models.pure.pure_interfaces import GPBaseLearner
 from pacoh.modules.distributions import JAXGaussianLikelihood
 from pacoh.modules.exact_gp import JAXExactGP
 from pacoh.modules.kernels import JAXRBFKernel
@@ -148,7 +148,7 @@ if __name__ == "__main__":
             likelihood = JAXGaussianLikelihood(variance_constraint_gt=1e-3)
             base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
-            return base_learner.init_fn, BaseLearnerInterface(
+            return base_learner.init_fn, GPBaseLearner(
                 base_learner_fit=base_learner.fit,
                 base_learner_predict=base_learner.pred_dist,
                 base_learner_mll_estimator=base_learner.marginal_ll,

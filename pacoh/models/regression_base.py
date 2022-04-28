@@ -36,20 +36,15 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         """
         Abstracts the boilerplate functionality of a Regression Model. This includes data normalization,
         fitting and inference
-        Public Methods:
-            add_data_point(s): add data and refit the posterior
-            predict: returns the predictive distribution for new points
-        Args:
-            input_dim: The dimensions of the input features
-            output_dim: The output dimension of the learner
-            normalize_data: Whether to do data normalisation prior to fitting and inference
-            normalization_stats: Normalization stats to set and use. If none, the default is to set it so
-                nothing happens
-            random_state: The master PRNGKey to be used in downstream modules
-        Notes:
-            Subclasses need to implement the following:
-                _recompute_posterior(): A method that is called after adding data points
-                predict(xs): target prediction
+
+        :param input_dim: The dimensionality of input points
+        :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
+        :param normalize_data: Whether to do everything with normalized data
+        :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
+            training data
+        :param flatten_ys: Whether to flatten the labels or not. Typically will be False when the (base)-learner
+            is a NN and True if it is a GP, since there, only 1-dimensional inputs are allowed
+        :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
         """
         self._input_dim = input_dim
         self._output_dim = output_dim

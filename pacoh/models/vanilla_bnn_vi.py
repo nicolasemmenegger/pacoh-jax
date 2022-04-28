@@ -41,12 +41,12 @@ def neg_elbo(
     :param prior: dict of GaussianBeliefState
     :param prior_weight: how heavy to weight the kl term between prior and posterior
     :param batch_size_vi: how many samples to use for approximating the elbo expectation
-    :param num_train_samples: the total number of train_samples
-    :param nn_apply: the pure nn forward function
-    :param likelihood_applys: the pure likelihood functions
-    :param learn_likelihood: whether to use
-    :param fixed_likelihood_params: should be None if learn_likelihood and a tree of parameters otherwise
-    :return elbo
+    :param num_train_points: the total number of train_samples
+    :param log_prob_fn: the log likelihood function of the model
+    :param batch_pred_fn: the prediction function of the model
+
+    :return elbo: standard vi objective
+
     Notes:
         x_batch and y_batch should live in the normalized space, which is the case when they are the stored data
     """
@@ -94,12 +94,11 @@ class BayesianNeuralNetworkVI(RegressionModel):
         :param random_state: A top level jax.PRNGKey
         :param hidden_layer_sizes: The hidden layers of the BNN
         :param activation: The activation function of the BNN
-        :param likelihood_std: The mean of the likelihood std parameter
         :param learn_likelihood: Whether to interpret the likelihood std as a learnable variable with a mean and std itself
         :param prior_std: The std of the prior on each NN weight
         :param prior_weight: Multiplicative factor before the KL divergence term in the ELBO
-        :param likelihood_prior_mean:
-        :param likelihood_prior_std: The sigma in sigmall sim N(0,sigma)
+        :param likelihood_prior_mean: The prior on the likelihood variance
+        :param likelihood_prior_std: The std in log scale for the raw parameter in the noise standard deviation
         :param batch_size_vi: The number of samples from the posterior to approximate the expectation in the ELBO
         :param batch_size: The number of data points you get while training and predicting
         :param lr: The learning rate to use with the ELBO gradients

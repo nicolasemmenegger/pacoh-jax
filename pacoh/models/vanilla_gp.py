@@ -24,18 +24,14 @@ class GPRegressionVanilla(RegressionModel):
         """
         A Regression Model wrapping a simple exact-inference Gaussian Process
 
-        Args:
-            input_dim: the input dimensionality of each data point.
-
-        Keyword Args:
-            kernel_outputscale: The outputscale of the RBF Kernel (i.e. linear scaling of the kernel's output.
-            kernel_lengthscale: The lengthscale of the RBF Kernel, i.e. corrsponding to the standard
-                deviation in the Gaussian density function.
-            likelihood_variance: The variance of the Gaussian likelihood, i.e. the variance of the noise.
-            normalize_data:  Whether to normalize the training data before fitting and the testing data before
-                inference.
-            normalizer: DataNormalizer Object if desired
-            random_state: A pseudo random number generator key from which to derive further
+        :param input_dim: The dimensionality of input points
+        :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
+        :param kernel_outputscale: The outputscale of the RBF Kernel
+        :param kernel_lengthscale: The lengthscale of the RBF Kernel
+        :param likelihood_variance: The variance of the label noise
+        :param normalize_data: Whether to normalize the data in some way
+        :param normalizer: The normalizer used for normalization, if none, no normalization will happen
+        :param random_state: A random seed
         """
         if output_dim > 1:
             raise NotImplementedError("GPs currently only support univariate mode")
@@ -73,13 +69,14 @@ class GPRegressionVanilla(RegressionModel):
         """
         computes the predictive distribution of the targets p(t|test_x, train_x, train_y)
 
+
         Args:
             test_x: (ndarray) query input data of shape (n_samples, ndim_x)
         Notes:
             The decorator takes care of the mapping into and from the normalized space and adds return_density argument
         """
         self._rng, predict_key = jax.random.split(self._rng)
-        pred_dist, self._state = self._apply_fns.pred_dist_fn(self._params, self._state, predict_key, test_x)
+        pred_dist, self._state = self._apply_fns.base_learner_predict(self._params, self._state, predict_key, test_x)
         return pred_dist
 
     def reset_to_prior(self):
@@ -91,7 +88,7 @@ class GPRegressionVanilla(RegressionModel):
     def _recompute_posterior(self):
         """Fits the underlying GP to the currently stored datapoints."""
         self._rng, fit_key = jax.random.split(self._rng)
-        _, self._state = self._apply_fns.fit_fn(
+        _, self._state = self._apply_fns.base_learner_fit(
             self._params, self._state, fit_key, self._xs_data, self._ys_data
         )
 
@@ -99,7 +96,7 @@ class GPRegressionVanilla(RegressionModel):
     def _prior(self, xs: jnp.ndarray):
         """Returns the prior of the underlying GP for the given datapoints."""
         self._rng, predict_key = jax.random.split(self._rng)
-        pred_dist, _ = self._apply_fns.pred_dist_fn(self._prior_params, self._prior_state, predict_key, xs)
+        pred_dist, _ = self._apply_fns.base_learner_predict(self._prior_params, self._prior_state, predict_key, xs)
         return pred_dist
 
 
