@@ -81,7 +81,7 @@ class SimpleNNTutorial(RegressionModel):
 
         # loss function init
         def loss_function(params, xs, ys_labels):
-            pred_ys = self.apply.pred(params, None, xs)
+            pred_ys = self.apply.pred_mean(params, None, xs)
             return -self.apply.log_prob(params, None, ys_labels, pred_ys)
 
         self._loss_val_and_grad = jax.jit(jax.value_and_grad(loss_function))
@@ -133,7 +133,7 @@ class EnsembleNNTutorial(RegressionModel):
 
         # loss function init
         def loss_function(params, xs, ys_labels):
-            pred_ys = self.apply.pred(params, None, xs)
+            pred_ys = self.apply.pred_mean(params, None, xs)
             ys_true_rep = jnp.repeat(jnp.expand_dims(ys_labels, axis=0), self._ensemble_size, axis=0)
             return -jnp.sum(
                 self.apply_bcst.log_prob(params, None, ys_true_rep, pred_ys)

@@ -3,6 +3,7 @@ from pacoh.bo.solver import FiniteDomainSolver, EvolutionarySolver
 
 import numpy as np
 
+
 class AcquisitionAlgorithm:
     """
     Algorithm which is defined through an acquisition function.
@@ -47,12 +48,11 @@ class AcquisitionAlgorithm:
 
     def __getstate__(self):
         self_dict = self.__dict__.copy()
-        del self_dict['solver']
+        del self_dict["solver"]
         return self_dict
 
 
 class UCB(AcquisitionAlgorithm):
-
     def __init__(self, model, domain, beta=2.0, **kwargs):
         super().__init__(model, domain, **kwargs)
         self.beta = beta

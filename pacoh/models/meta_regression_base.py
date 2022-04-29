@@ -21,6 +21,11 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
     Abstracts the boilerplate functionality of a MetaLearnedRegression Model. This includes data normalization,
     fitting and inference. It also includes meta-functionality, in particular meta_fitting to multiple tasks,
     and meta_prediction on a new task.
+
+    """
+
+    """
+    
     Public Methods:
         predict: predicts with a fitted base learner
         fit: fits the base learner
@@ -102,8 +107,12 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         )
 
         if meta_valid_tuples is not None:
-            meta_valid_tuples_context = [handle_batch_input_dimensionality(xs, ys) for xs, ys, _, __ in meta_valid_tuples]
-            meta_valid_tuples_test = [handle_batch_input_dimensionality(xs, ys) for _, __, xs, ys in meta_valid_tuples]
+            meta_valid_tuples_context = [
+                handle_batch_input_dimensionality(xs, ys) for xs, ys, _, __ in meta_valid_tuples
+            ]
+            meta_valid_tuples_test = [
+                handle_batch_input_dimensionality(xs, ys) for _, __, xs, ys in meta_valid_tuples
+            ]
             meta_valid_tuples = [
                 (con[0], con[1], test[0], test[1])
                 for con, test in zip(meta_valid_tuples_context, meta_valid_tuples_test)

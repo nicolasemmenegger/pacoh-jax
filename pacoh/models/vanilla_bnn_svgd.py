@@ -72,7 +72,7 @@ class BayesianNeuralNetworkSVGD(RegressionModel):
         # c) setup all the forward functions needed by the SVGD class.
         def target_post_prob_batched(particles, rngs, *data, apply, apply_bdcst):
             xs, ys = data
-            ys_pred = apply.pred(particles, None, xs)
+            ys_pred = apply.pred_mean(particles, None, xs)
             ys_true_rep = jnp.repeat(jnp.expand_dims(ys, axis=0), n_particles, axis=0)
 
             log_likelihoods = apply_bdcst.log_prob(particles, None, ys_true_rep, ys_pred)

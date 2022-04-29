@@ -42,7 +42,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         lr: float = 1e-3,
         lr_decay: float = 1.0,
         prior_factor: float = 0.1,
-        train_data_in_kl: bool =True,
+        train_data_in_kl: bool = True,
         num_samples_kl: int = 20,
         hyperprior_lengthscale: float = 0.2,  # prior_lengthscale
         hyperprior_outputscale: float = 2.0,  # prior_outputscale
@@ -50,43 +50,43 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         normalize_data: bool = True,
         normalizer: DataNormalizer = None,
         minibatch_at_dataset_level: bool = False,  # if True, we can vectorize the loop ranging over the tasks
-        dataset_batch_size: Optional[
-            int
-        ] = None,  # if None, and minibatch_at_dataset_level is True, then the datasets have to have the same size
+        dataset_batch_size: Optional[int] = None,
         random_state: jax.random.PRNGKey = None,
     ):
         """
-        :param input_dim: The dimensionality of input points
-        :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
-        :param domain: The domain on which to sample the points used for the marginal kl
-        :param learning_mode: Can be one of "learn_mean", "learn_kernel" or "both"
-        :param weight_decay: Weight decay on the parameters. Corresponds to setting a (certain)
-            gaussian hyperprior on the parameters of the mean, kernel. We do not apply weight_decay
-            on the likelihood parameters, since this coresponds to letting the noise go to softplus(0.0) = 0.69
-       :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
-        :param mean_module: Can be "NN", "constant", "zero", or a Mean object
-        :param mean_nn_layers: Size specifications of the hidden (!) layers used in the mean feature maps
-        :param kernel_nn_layers: Size specifications of the hidden (!) layers used in the kernel feature maps
-        :param feature_dim: In case covar_module is NN, feature_dim denotes the dimensionality of the output
-            of the MLP that is then fed through a RBF kernel
-        :param task_batch_size: The number of tasks in a batch
-        :param num_tasks: The number of tasks we intend to train on. Required for jax.jit reasons
-        :param lr: The learning rate of the AdamW optimizer
-        :param lr_decay: The learning rate decay. 1.0 means no decay
-        :param prior_factor: How to weight the functional kl term, denoted as kappa in the paper
-        :param train_data_in_kl: Whether to include the train data in the evaluation vector of the functional kl-divergence
-            if yes, at most half the samples will come from the train data
-        :param num_samples_kl: The number of samples at which we compute the kl (the dimensionality of the marginal
-            distributions we compare)
-        :param hyperprior_lengthscale: The lengthscale of the GP hyperprior in function space
-        :param hyperprior_outputscale: The outputscale of the GP hyperprior in function space
-        :param hyperprior_noise_std: The lengthscale of the GP hyperprior in function space
-        :param normalize_data: Whether to do everything with normalized data
-        :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
-            training data
-        :param minibatch_at_dataset_level: Whether to draw minibatches per task, i.e. at the dataset level
-        :param dataset_batch_size: If minibatch_at_dataset_level is true,
-        :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
+         :param input_dim: The dimensionality of input points
+         :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
+         :param domain: The domain on which to sample the points used for the marginal kl
+         :param learning_mode: Can be one of "learn_mean", "learn_kernel" or "both"
+         :param weight_decay: Weight decay on the parameters. Corresponds to setting a (certain)
+             gaussian hyperprior on the parameters of the mean, kernel. We do not apply weight_decay
+             on the likelihood parameters, since this coresponds to letting the noise go to softplus(0.0) = 0.69
+        :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
+         :param mean_module: Can be "NN", "constant", "zero", or a Mean object
+         :param mean_nn_layers: Size specifications of the hidden (!) layers used in the mean feature maps
+         :param kernel_nn_layers: Size specifications of the hidden (!) layers used in the kernel feature maps
+         :param feature_dim: In case covar_module is NN, feature_dim denotes the dimensionality of the output
+             of the MLP that is then fed through a RBF kernel
+         :param task_batch_size: The number of tasks in a batch
+         :param num_tasks: The number of tasks we intend to train on. Required for jax.jit reasons
+         :param lr: The learning rate of the AdamW optimizer
+         :param lr_decay: The learning rate decay. 1.0 means no decay
+         :param prior_factor: How to weight the functional kl term, denoted as kappa in the paper
+         :param train_data_in_kl: Whether to include the train data in the evaluation vector of the functional kl-divergence
+             if yes, at most half the samples will come from the train data
+         :param num_samples_kl: The number of samples at which we compute the kl (the dimensionality of the marginal
+             distributions we compare)
+         :param hyperprior_lengthscale: The lengthscale of the GP hyperprior in function space
+         :param hyperprior_outputscale: The outputscale of the GP hyperprior in function space
+         :param hyperprior_noise_std: The lengthscale of the GP hyperprior in function space
+         :param normalize_data: Whether to do everything with normalized data
+         :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
+             training data
+         :param minibatch_at_dataset_level: Whether to draw minibatches per task, i.e. at the dataset level
+         :param dataset_batch_size: If minibatch_at_dataset_level is true, the number of points used per task
+             in each step. If None, and minibatch_at_dataset_level is True, then the datasets have to have
+             the same size.
+         :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
         """
         super().__init__(
             input_dim,
@@ -125,9 +125,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood=True,
-            initial_noise_std=jax.nn.softplus(0.) + 0.001,
-            kernel_length_scale=jax.nn.softplus(0.),
-            kernel_output_scale=jax.nn.softplus(0.)
+            initial_noise_std=jax.nn.softplus(0.0) + 0.001,
+            kernel_length_scale=jax.nn.softplus(0.0),
+            kernel_output_scale=jax.nn.softplus(0.0),
         )
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
@@ -170,7 +170,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             )
 
         def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
-            """meta_xs_batch is a python list of jnp.arrays"""
+            # meta_xs_batch is a python list of jnp.arrays
             loss = 0.0
             keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
             for xs, ys, key in zip(meta_xs_batch, meta_ys_batch, keys):
@@ -180,16 +180,14 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         target_post_prob_vmap_array = jax.vmap(target_post_prob_one_task, in_axes=(None, 0, 0, 0))
 
         def target_post_prob_vmap(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
-            """meta_xs_batch is a python list of jnp.arrays"""
+            # meta_xs_batch is a jnp.array
             keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
             return jnp.sum(target_post_prob_vmap_array(particle, keys, meta_xs_batch, meta_ys_batch))
 
         if minibatch_at_dataset_level:
             self.target_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(target_post_prob_vmap)))
-            self.target_debugging_purposes = target_post_prob_vmap
         else:
             self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob_loop))
-            self.target_debugging_purposes = target_post_prob_loop
 
         # f-pacoh specific initialisation
         self.domain_dist = Uniform(low=domain.l, high=domain.u)
@@ -205,7 +203,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         xs_batch, ys_batch = mini_batch
         self._rng, key = jax.random.split(self._rng)
         loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch)
-        # self.target_debugging_purposes(self.particle, key, xs_batch, ys_batch)
         updates, self.optimizer_state = self.optimizer.update(grad, self.optimizer_state, self.particle)
         self.particle = optax.apply_updates(self.particle, updates)
         return loss
@@ -236,7 +233,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             xs_kl = jnp.concatenate(
                 [
                     xs_train[idx_rand_train],  # already normalized
-                    self._normalizer.handle_data(samples)  # need normalization
+                    self._normalizer.handle_data(samples),  # need normalization
                 ],
                 axis=0,
             )
@@ -257,7 +254,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         # sample / construct measurement set
         xs_kl = self._sample_measurement_set(k, xs)
 
-        hyperposterior, _ = self._apply_fns.base_learner_predict(particle, self.empty_state, None, xs_kl, True)
+        hyperposterior, _ = self._apply_fns.base_learner_predict(
+            particle, self.empty_state, None, xs_kl, True
+        )
         hyperprior = self.hyperprior_marginal(xs_kl)
 
         assert isinstance(
@@ -273,14 +272,13 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             kl = multivariate_kl(hyperposterior, hyperprior_with_noise)
             return kl
 
-        # this is both differentiable and jittable
+        # WARNING: this is causing some problems with jit, even though it should not:
         # https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#control-flow
-        # standard for loop is differentiable as condition does not depend on data
-        # WARNING: except it's apparently not...
+        # the for loop is diffable and jittable, since the condition is not dependent on the data
+        # the jax.lax.cond should make sure that the loop body is differentiable and jittable too (?)
 
         inject_noise_std = self.hyperprior_noise_std
         kl = jnp.nan
-        # kl = compute_kl_with_noise(inject_noise_std)
         for _ in range(5):
             kl = jax.lax.cond(
                 jnp.isnan(kl),
@@ -301,8 +299,12 @@ if __name__ == "__main__":
 
     meta_env = RandomMixtureMetaEnv(random_state=np.random.RandomState(29))
     num_train_tasks = 20
-    meta_train_data = meta_env.generate_uniform_meta_train_data(num_tasks=num_train_tasks, num_points_per_task=10)
-    meta_test_data = meta_env.generate_uniform_meta_valid_data(num_tasks=50, num_points_context=10, num_points_test=160)
+    meta_train_data = meta_env.generate_uniform_meta_train_data(
+        num_tasks=num_train_tasks, num_points_per_task=10
+    )
+    meta_test_data = meta_env.generate_uniform_meta_valid_data(
+        num_tasks=50, num_points_context=10, num_points_test=160
+    )
 
     NN_LAYERS = (32, 32)
 
@@ -312,38 +314,58 @@ if __name__ == "__main__":
     if plot:
         for x_train, y_train in meta_train_data:
             plt.scatter(x_train, y_train)
-        plt.title('sample from the GP prior')
+        plt.title("sample from the GP prior")
         plt.show()
 
     """ 2) Classical mean learning based on mll """
-    print('\n ---- GPR mll meta-learning ---- ')
+    print("\n ---- GPR mll meta-learning ---- ")
 
     prior_factor = 1e-2  # This is larger than in the original codebase by a factor of 10
-    gp_model = F_PACOH_MAP_GP(1, 1, domain=meta_env.domain, random_state=jax.random.PRNGKey(3425),
-                             num_tasks=num_train_tasks,
-                             weight_decay=1e-4, prior_factor=prior_factor,
-                             task_batch_size=2, covar_module='NN', mean_module='NN', lr=1e-3,
-                             mean_nn_layers=NN_LAYERS, kernel_nn_layers=NN_LAYERS)
+    gp_model = F_PACOH_MAP_GP(
+        1,
+        1,
+        domain=meta_env.domain,
+        random_state=jax.random.PRNGKey(3425),
+        num_tasks=num_train_tasks,
+        weight_decay=1e-4,
+        prior_factor=prior_factor,
+        task_batch_size=2,
+        covar_module="NN",
+        mean_module="NN",
+        lr=1e-3,
+        mean_nn_layers=NN_LAYERS,
+        kernel_nn_layers=NN_LAYERS,
+    )
     itrs = 0
     for i in range(10):
-        def mapper(name, pname, val, length_scale, output_scale, likelihood_noise):
+
+        def mapper(name, _, val, length_scale, output_scale, likelihood_noise):
             if "likelihood" in name:
-                return val*0.0+jnp.log(likelihood_noise)
+                return val * 0.0 + jnp.log(likelihood_noise)
             elif "LengthScale" in name:
-                return val*0.0+jnp.log(length_scale)
+                return val * 0.0 + jnp.log(length_scale)
             elif "OutputScale" in name:
-                return val*0.0+jnp.log(output_scale)
+                return val * 0.0 + jnp.log(output_scale)
             else:
                 raise NotImplementedError("is problem")
 
         def newparticle(particle, length_scale, output_scale, likelihood_noise):
-            return hk.data_structures.map(functools.partial(mapper, length_scale=length_scale, output_scale=output_scale, likelihood_noise=likelihood_noise), particle)
+            return hk.data_structures.map(
+                functools.partial(
+                    mapper,
+                    length_scale=length_scale,
+                    output_scale=output_scale,
+                    likelihood_noise=likelihood_noise,
+                ),
+                particle,
+            )
 
         # gp_model.particle = newparticle(gp_model.particle, 0.6931, 0.6931, 0.6941)
 
-        gp_model.meta_fit(meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=200)
+        gp_model.meta_fit(
+            meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=200
+        )
         itrs += 200
-
 
         task_xs, task_ys = gp_model.meta_train_tuples_debugging_purposes[0]
 
@@ -360,11 +382,7 @@ if __name__ == "__main__":
         print("all datasets", gp_model.eval_datasets(meta_test_data))
         print("params", jax.tree_map(jax.nn.softplus, gp_model.particle))
 
-
-
-
         plt.plot(x_plot, pred_mean)
         plt.fill_between(x_plot.flatten(), lcb, ucb, alpha=0.2)
-        plt.title('GPR meta mll (prior_factor =  %.4f) itrs = %i' % (prior_factor, itrs))
+        plt.title("GPR meta mll (prior_factor =  %.4f) itrs = %i" % (prior_factor, itrs))
         plt.show()
-

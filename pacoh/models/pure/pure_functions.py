@@ -18,28 +18,37 @@ from pacoh.util.constants import MLP_MODULE_NAME
 
 
 def construct_vanilla_gp_forward_fns(
-    input_dim, output_dim,
-    kernel_outputscale, kernel_lengthscale, likelihood_variance,
-    kernel_log_os_var=0.0, kernel_log_ls_var=0., likelihood_log_var=0.0
+    input_dim,
+    output_dim,
+    kernel_outputscale,
+    kernel_lengthscale,
+    likelihood_variance,
+    kernel_log_os_var=0.0,
+    kernel_log_ls_var=0.0,
+    likelihood_log_var=0.0,
 ):
     def factory():
         # Initialize the mean module with a zero-mean, and use an RBF kernel with *no* learned feature map
         mean_module = JAXZeroMean(output_dim=output_dim)
-        covar_module = JAXRBFKernel(input_dim, kernel_lengthscale, kernel_outputscale, kernel_log_ls_var, kernel_log_os_var)
+        covar_module = JAXRBFKernel(
+            input_dim, kernel_lengthscale, kernel_outputscale, kernel_log_ls_var, kernel_log_os_var
+        )
         likelihood = JAXGaussianLikelihood(likelihood_variance, likelihood_log_var)
         gp = JAXExactGP(mean_module, covar_module, likelihood)
 
         # choose gp.pred_dist as the template function, as it includes the likelihood
-        return gp.init_fn, GPBaseLearner(base_learner_fit=gp.fit,
-                                         base_learner_predict=gp.pred_dist,
-                                         base_learner_mll_estimator=gp.marginal_ll)
+        return gp.init_fn, GPBaseLearner(
+            base_learner_fit=gp.fit,
+            base_learner_predict=gp.pred_dist,
+            base_learner_mll_estimator=gp.marginal_ll,
+        )
 
     return factory
 
 
 @functools.partial(
     multi_transform_and_batch_module,
-    num_data_args={"log_prob": 2, "pred_dist": 1, "pred": 1},
+    num_data_args={"log_prob": 2, "pred_dist": 1, "pred_mean": 1},
 )
 def construct_bnn_forward_fns(
     output_dim,
@@ -88,7 +97,7 @@ def construct_gp_base_learner(
     learn_likelihood=True,
     initial_noise_std=1.0,
     kernel_length_scale=1.0,
-    kernel_output_scale=1.0
+    kernel_output_scale=1.0,
 ):
     def factory():
         """The arguments here are what _setup_gp_prior had."""
@@ -98,9 +107,17 @@ def construct_gp_base_learner(
                 "learn_kernel",
                 "both",
             ], "neural network parameters must be learned"
-            covar_module = JAXRBFKernelNN(input_dim, feature_dim, layer_sizes=kernel_nn_layers, length_scale=kernel_length_scale, output_scale=kernel_output_scale)
+            covar_module = JAXRBFKernelNN(
+                input_dim,
+                feature_dim,
+                layer_sizes=kernel_nn_layers,
+                length_scale=kernel_length_scale,
+                output_scale=kernel_output_scale,
+            )
         elif covar_option == "SE":
-            covar_module = JAXRBFKernel(input_dim, length_scale=kernel_length_scale, output_scale=kernel_output_scale)
+            covar_module = JAXRBFKernel(
+                input_dim, length_scale=kernel_length_scale, output_scale=kernel_output_scale
+            )
         elif callable(covar_option):
             covar_module = covar_option()
             assert isinstance(covar_module, JAXKernel), "Invalid covar_module option"
@@ -133,16 +150,12 @@ def construct_gp_base_learner(
 
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)
 
-        init_fn = base_learner.init_fn
-        base_learner_fit = base_learner.fit
-        base_learner_predict = base_learner.pred_dist
-
         def base_learner_mll_estimator(xs, ys):
             return base_learner.marginal_ll(xs, ys)
 
-        return init_fn, GPBaseLearner(
-            base_learner_fit=base_learner_fit,
-            base_learner_predict=base_learner_predict,
+        return base_learner.init_fn, GPBaseLearner(
+            base_learner_fit=base_learner.fit,
+            base_learner_predict=base_learner.pred_dist,
             base_learner_mll_estimator=base_learner_mll_estimator,
         )
 

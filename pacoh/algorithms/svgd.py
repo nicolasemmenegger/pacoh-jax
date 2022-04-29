@@ -6,12 +6,6 @@ import optax
 
 from jax import numpy as jnp
 
-from pacoh.modules.kernels import (
-    pytree_sq_l2_dist,
-    pytree_rbf,
-    pytree_rbf_set,
-    get_pytree_rbf_fn,
-)
 from pacoh.util.tree_util import Tree, pytree_sum, pytree_shape, pytree_unstack
 
 

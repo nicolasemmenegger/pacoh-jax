@@ -3,7 +3,6 @@ import numpy as np
 
 
 class Domain:
-
     @property
     def d(self) -> int:
         return self._d
@@ -24,7 +23,6 @@ class Domain:
 
 
 class ContinuousDomain(Domain):
-
     def __init__(self, l, u):
         assert l.ndim == u.ndim == 1 and l.shape[0] == u.shape[0]
         assert np.all(l < u)
@@ -78,7 +76,6 @@ class ContinuousDomain(Domain):
 
 
 class DiscreteDomain(Domain):
-
     def __init__(self, points, d=None):
         if points.ndim == 1:
             points = np.expand_dims(points, axis=-1)

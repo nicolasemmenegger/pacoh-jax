@@ -92,9 +92,9 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood,
-            initial_noise_std=jax.nn.softplus(0.)+1e-3,
-            kernel_length_scale=jax.nn.softplus(0.),
-            kernel_output_scale=jax.nn.softplus(0.)
+            initial_noise_std=jax.nn.softplus(0.0) + 1e-3,
+            kernel_length_scale=jax.nn.softplus(0.0),
+            kernel_output_scale=jax.nn.softplus(0.0),
         )
         init_fn, self._apply_fns = hk.multi_transform_with_state(pacoh_map_closure)
         self._rng, init_key = jax.random.split(self._rng)
@@ -102,7 +102,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             init_fn, init_key, (task_batch_size, input_dim)
         )
         self.state = self.empty_state = empty_state
-
 
         # self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, self.particle)
 
@@ -124,7 +123,6 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             #     self.hyperprior, jax.tree_map(lambda v: jnp.expand_dims(v, 0), particle)
             # )
             return total_mll  # + prior_weight * jnp.sum(reg)
-
 
         self.target_val_and_grad = jax.jit(jax.value_and_grad(target_post_prob))
 
@@ -156,8 +154,12 @@ if __name__ == "__main__":
 
     num_train_tasks = 20
     meta_env = RandomMixtureMetaEnv(random_state=np.random.RandomState(29))
-    meta_train_data = meta_env.generate_uniform_meta_train_data(num_tasks=num_train_tasks, num_points_per_task=10)
-    meta_test_data = meta_env.generate_uniform_meta_valid_data(num_tasks=50, num_points_context=10, num_points_test=160)
+    meta_train_data = meta_env.generate_uniform_meta_train_data(
+        num_tasks=num_train_tasks, num_points_per_task=10
+    )
+    meta_test_data = meta_env.generate_uniform_meta_valid_data(
+        num_tasks=50, num_points_context=10, num_points_test=160
+    )
 
     NN_LAYERS = (32, 32)
     plot = True
@@ -166,24 +168,33 @@ if __name__ == "__main__":
     if plot:
         for x_train, y_train in meta_train_data:
             plt.scatter(x_train, y_train)
-        plt.title('sample from the GP prior')
+        plt.title("sample from the GP prior")
         plt.show()
 
     """ 2) Classical mean learning based on mll """
 
-    print('\n ---- GPR mll meta-learning ---- ')
+    print("\n ---- GPR mll meta-learning ---- ")
 
     torch.set_num_threads(2)
 
     weight_decay = 0.01
-    gp_model = PACOH_MAP_GP(input_dim=meta_env.domain.d, output_dim=1, num_tasks=num_train_tasks,
-                            weight_decay=weight_decay, task_batch_size=1,
-                            covar_module='NN', mean_module='NN', mean_nn_layers=NN_LAYERS,
-                            kernel_nn_layers=NN_LAYERS)
+    gp_model = PACOH_MAP_GP(
+        input_dim=meta_env.domain.d,
+        output_dim=1,
+        num_tasks=num_train_tasks,
+        weight_decay=weight_decay,
+        task_batch_size=1,
+        covar_module="NN",
+        mean_module="NN",
+        mean_nn_layers=NN_LAYERS,
+        kernel_nn_layers=NN_LAYERS,
+    )
     itrs = 0
     print("---- weight-decay =  %.4f ----" % weight_decay)
     for i in range(10):
-        gp_model.meta_fit(meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=500)
+        gp_model.meta_fit(
+            meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=500
+        )
         itrs += 500
 
         x_plot = np.linspace(meta_env.domain.l, meta_env.domain.u, num=150)
@@ -196,7 +207,7 @@ if __name__ == "__main__":
 
         plt.plot(x_plot, pred_mean)
         plt.fill_between(x_plot.flatten(), lcb, ucb, alpha=0.2, color="orange")
-        plt.title('GPR meta mll (weight-decay =  %.4f) itrs = %i' % (weight_decay, itrs))
+        plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
         plt.show()
 
         print("AFTER ITERATION", itrs)

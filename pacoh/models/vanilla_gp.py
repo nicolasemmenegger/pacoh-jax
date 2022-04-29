@@ -50,9 +50,9 @@ class GPRegressionVanilla(RegressionModel):
             kernel_outputscale,
             kernel_lengthscale,
             likelihood_variance,
-            kernel_log_os_var=0.,
-            kernel_log_ls_var=0.,
-            likelihood_log_var=0.,
+            kernel_log_os_var=0.0,
+            kernel_log_ls_var=0.0,
+            likelihood_log_var=0.0,
         )
 
         # initialize model
@@ -76,7 +76,9 @@ class GPRegressionVanilla(RegressionModel):
             The decorator takes care of the mapping into and from the normalized space and adds return_density argument
         """
         self._rng, predict_key = jax.random.split(self._rng)
-        pred_dist, self._state = self._apply_fns.base_learner_predict(self._params, self._state, predict_key, test_x)
+        pred_dist, self._state = self._apply_fns.base_learner_predict(
+            self._params, self._state, predict_key, test_x
+        )
         return pred_dist
 
     def reset_to_prior(self):
@@ -96,7 +98,9 @@ class GPRegressionVanilla(RegressionModel):
     def _prior(self, xs: jnp.ndarray):
         """Returns the prior of the underlying GP for the given datapoints."""
         self._rng, predict_key = jax.random.split(self._rng)
-        pred_dist, _ = self._apply_fns.base_learner_predict(self._prior_params, self._prior_state, predict_key, xs)
+        pred_dist, _ = self._apply_fns.base_learner_predict(
+            self._prior_params, self._prior_state, predict_key, xs
+        )
         return pred_dist
 
 

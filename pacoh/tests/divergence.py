@@ -5,7 +5,6 @@ import numpy as np
 import numpyro.distributions
 import torch.distributions
 from jax import numpy as jnp
-from numpyro.distributions import kl_divergence
 
 from pacoh.models.f_pacoh_map import F_PACOH_MAP_GP
 from pacoh.modules.domain import ContinuousDomain
@@ -56,22 +55,23 @@ class TestFunctionalKL(unittest.TestCase):
     def test_multivariate_marginal_kl(self):
         n = 20
         cov1 = jax.random.normal(jax.random.PRNGKey(32), (n, n))
-        cov1 = cov1.T @ cov1 + 0.1*jnp.eye(n)
+        cov1 = cov1.T @ cov1 + 0.1 * jnp.eye(n)
         mean1 = jax.random.normal(jax.random.PRNGKey(13), (n,))
         cov2 = jax.random.normal(jax.random.PRNGKey(53), (n, n))
-        cov2 = cov2.T @ cov2 + 0.1*jnp.eye(n)
+        cov2 = cov2.T @ cov2 + 0.1 * jnp.eye(n)
         mean2 = jax.random.normal(jax.random.PRNGKey(24), (n,))
 
         npd1 = numpyro.distributions.MultivariateNormal(mean1, cov1)
         npd2 = numpyro.distributions.MultivariateNormal(mean2, cov2)
 
-        td1 = torch.distributions.MultivariateNormal(torch.from_numpy(np.array(mean1)), torch.from_numpy(np.array(cov1)))
-        td2 = torch.distributions.MultivariateNormal(torch.from_numpy(np.array(mean2)), torch.from_numpy(np.array(cov2)))
+        td1 = torch.distributions.MultivariateNormal(
+            torch.from_numpy(np.array(mean1)), torch.from_numpy(np.array(cov1))
+        )
+        td2 = torch.distributions.MultivariateNormal(
+            torch.from_numpy(np.array(mean2)), torch.from_numpy(np.array(cov2))
+        )
         my_kl = multivariate_kl(npd1, npd2)
         torch_kl = torch.distributions.kl_divergence(td1, td2)
 
         print(my_kl)
         print(torch_kl)
-
-
-

@@ -11,7 +11,7 @@ class JAXGaussianLikelihood(hk.Module):
     def __init__(
         self,
         variance: float = 1.0,
-        log_var_var = 0.0,
+        log_var_var=0.0,
         variance_constraint_gt=0.0,
         output_dim=1,
         learn_likelihood=True,
@@ -19,7 +19,9 @@ class JAXGaussianLikelihood(hk.Module):
         super().__init__(LIKELIHOOD_MODULE_NAME)
         variance = jnp.ones((output_dim,)) * variance
         if learn_likelihood:
-            self.variance = PositiveParameter(variance, log_variance=log_var_var, boundary_value=variance_constraint_gt)
+            self.variance = PositiveParameter(
+                variance, log_variance=log_var_var, boundary_value=variance_constraint_gt
+            )
         else:
             self.variance = lambda: variance
 

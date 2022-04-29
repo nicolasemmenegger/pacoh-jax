@@ -64,12 +64,12 @@ class VMAPDistributionTest(TreeTestCase):
 
         # Multiple outputs
         self.assertEqual(multiple_outputs[0].batch_shape, (3,))
-        self.assertEqual(multiple_outputs[0].event_shape, (8,1))
+        self.assertEqual(multiple_outputs[0].event_shape, (8, 1))
         self.assertEqual(multiple_outputs[1].shape, (3, 8, 1))
 
         # Different out_axes
         self.assertEqual(different_axes[0].batch_shape, (3,))
-        self.assertEqual(different_axes[0].event_shape, (8,1))
+        self.assertEqual(different_axes[0].event_shape, (8, 1))
         self.assertEqual(different_axes[1].shape, (8, 3, 1))
 
         # one axis vmapped, one not

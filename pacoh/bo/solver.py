@@ -70,15 +70,24 @@ class GridSolver(CandidateSolver):
 
 
 class EvolutionarySolver(Solver):
-
-    def __init__(self, domain, survival_rate=0.9, num_particles_per_d=100, max_iter_per_d=50, initial_x=None,
-                 atol: float = 1e-8, random_state=None):
+    def __init__(
+        self,
+        domain,
+        survival_rate=0.9,
+        num_particles_per_d=100,
+        max_iter_per_d=50,
+        initial_x=None,
+        atol: float = 1e-8,
+        random_state=None,
+    ):
         super().__init__(domain, initial_x=initial_x)
         self.d = domain.d
         self.domain = domain
         self._rds = np.random if random_state is None else random_state
 
-        self.num_particles = self.d * (num_particles_per_d if num_particles_per_d is None else num_particles_per_d)
+        self.num_particles = self.d * (
+            num_particles_per_d if num_particles_per_d is None else num_particles_per_d
+        )
         self.max_iter = self.d * max_iter_per_d
         self.survival_rate = survival_rate if survival_rate is None else survival_rate
         self._atol = atol
@@ -108,7 +117,7 @@ class EvolutionarySolver(Solver):
 
             # sort by fitness, eliminate worst particles and duplicate best particles
             sorted_idx = np.argsort(best_f)
-            num_elimins = math.ceil(self.num_particles * (1-self.survival_rate))
+            num_elimins = math.ceil(self.num_particles * (1 - self.survival_rate))
             new_idx = np.concatenate([sorted_idx[:-num_elimins], sorted_idx[:num_elimins]])
             best_f = best_f[new_idx]
             particles = particles[new_idx]
@@ -121,7 +130,7 @@ class EvolutionarySolver(Solver):
                 break  # stop the optimization if there was no improvement for 5 consecutive iterations
             _best_f_last = min(_best_f_last, _best_f_all)
         if i >= (self.max_iter - 1):
-            warnings.warn(f'EvolutionarySolver has reached the maximum number of {self.max_iter} iterations.')
+            warnings.warn(f"EvolutionarySolver has reached the maximum number of {self.max_iter} iterations.")
 
         best_idx = np.argmin(best_f)
         return particles[best_idx], best_f[best_idx]
@@ -132,8 +141,8 @@ class EvolutionarySolver(Solver):
         x = x / np.linalg.norm(x, axis=-1)[:, None]
 
         # transform in unit ball
-        u = self._rds.uniform(0, 1, size=(self.num_particles, ))
-        return x * (u**(1/self.d))[:, None]
+        u = self._rds.uniform(0, 1, size=(self.num_particles,))
+        return x * (u ** (1 / self.d))[:, None]
 
     @property
     def requires_gradients(self):
@@ -142,7 +151,6 @@ class EvolutionarySolver(Solver):
     @property
     def requires_safety(self):
         return False
-
 
 
 """ helpers """

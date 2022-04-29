@@ -90,8 +90,7 @@ class JAXExactGP:
             return self.prior(xs_test)
 
     def pred_dist(self, xs_test, noiseless=False):
-        """ Prediction with noise.
-        """
+        """Prediction with noise."""
         predictive_dist_noiseless = self.posterior(xs_test, return_full_covariance=True)
         if noiseless:
             return predictive_dist_noiseless
@@ -117,7 +116,7 @@ class JAXExactGP:
 
     def marginal_ll(self, xs, ys):
         data_cov_w_noise = self._data_cov_with_noise(xs)  # Kernel matrix with noise on diagonal
-        ys_centered = self._ys_centered(xs, ys) # ys - prior_mean_function(xs)
+        ys_centered = self._ys_centered(xs, ys)  # ys - prior_mean_function(xs)
         mvn = numpyro.distributions.MultivariateNormal(jnp.zeros_like(xs.flatten()), data_cov_w_noise)
         alt_ll = mvn.log_prob(ys_centered)
         return alt_ll

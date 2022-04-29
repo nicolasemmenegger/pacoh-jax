@@ -8,7 +8,6 @@ from config import BASE_DIR
 
 
 class MetaEnvironment:
-
     def __init__(self, random_state=None):
         self._rds = np.random if random_state is None else random_state
 

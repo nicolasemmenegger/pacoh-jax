@@ -4,14 +4,14 @@ import haiku as hk
 
 
 def _softplus_inverse(x):
-    return jnp.log(jnp.exp(x) - 1.)
+    return jnp.log(jnp.exp(x) - 1.0)
 
 
 class PositiveParameter(hk.Module):
     """
-        A simple module storing a positive parameter. Can specify a mean and variance. The raw parameter is stored
-        in log scale, more specifically, param = softplus(raw_parameter) + boundary_constraint, which is consistent
-        with gpytorch.
+    A simple module storing a positive parameter. Can specify a mean and variance. The raw parameter is stored
+    in log scale, more specifically, param = softplus(raw_parameter) + boundary_constraint, which is consistent
+    with gpytorch.
     """
 
     def __init__(self, mean=None, log_variance=0.0, boundary_value=0.0, shape=None, name="PositiveParameter"):
@@ -38,17 +38,12 @@ class PositiveParameter(hk.Module):
         else:
             self.shape = mean.shape
 
-
     def __call__(self):
-        if self.log_scale_var == 0.:
+        if self.log_scale_var == 0.0:
             initializer = hk.initializers.Constant(self.log_scale_mean)
         else:
             initializer = hk.initializers.RandomNormal(self.log_scale_mean, self.log_scale_var)
         exponentiated = jax.nn.softplus(
-            hk.get_parameter(
-                "__positive_log_scale_param",
-                shape=self.shape,
-                init=initializer
-            )
+            hk.get_parameter("__positive_log_scale_param", shape=self.shape, init=initializer)
         )
         return exponentiated + self.boundary_value

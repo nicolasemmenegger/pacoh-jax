@@ -77,9 +77,17 @@ def _flatten_leaf(maybe_dist: Union[npd.Distribution, Any]):
     """We also handle the special case where the first argument is a distribution, and the second argument is hk.State"""
     if isinstance(maybe_dist, npd.Distribution):
         params, aux = maybe_dist.tree_flatten()
-        return DIST_ID.index(maybe_dist.__class__), params, _auxiliary_to_jax_type(aux),
+        return (
+            DIST_ID.index(maybe_dist.__class__),
+            params,
+            _auxiliary_to_jax_type(aux),
+        )
     else:
-        return -1, maybe_dist, None,  # id -1 means it's not a distribution, None auxiliary data needed
+        return (
+            -1,
+            maybe_dist,
+            None,
+        )  # id -1 means it's not a distribution, None auxiliary data needed
 
 
 def _unstack_flat_leaf_pytrees(isleaf, stacked_tree):
@@ -100,22 +108,25 @@ def _unflatten_leaf(cls_id, vmapped_output, aux_converted):
 
 def vmap_dist(f: Callable[[Any], Tree], in_axes=0, out_axes=0, axis_name=None):
     """Helper function that vmaps a function that may return a distribution as output."""
+
     def flat_f(*args, **kwargs):
-        """ Returns a 3-tuple of trees:
-              * A tree of integers having exactly the leaves of the original output tree, except that numpyro.Distributions are treated as leaves
-              * A tree of actual data, where leaves that were numpyro.Distributions were flattened, and therefore correspond to new pytrees
-              * A tree of auxiliary information, on how to unflatten the leaves corresponding to flattened Distribution objects
-            Note: the tree of actual data has the same prefix definition as the original tree, and hence we can apply vmap with
-            custom out_axes!
+        """Returns a 3-tuple of trees:
+          * A tree of integers having exactly the leaves of the original output tree, except that numpyro.Distributions are treated as leaves
+          * A tree of actual data, where leaves that were numpyro.Distributions were flattened, and therefore correspond to new pytrees
+          * A tree of auxiliary information, on how to unflatten the leaves corresponding to flattened Distribution objects
+        Note: the tree of actual data has the same prefix definition as the original tree, and hence we can apply vmap with
+        custom out_axes!
         """
 
         output_tree = f(*args, **kwargs)
-        flattened_leaves_tree = jax.tree_map(_flatten_leaf,
-                                             output_tree,
-                                             is_leaf=lambda l: isinstance(l, npd.Distribution))
+        flattened_leaves_tree = jax.tree_map(
+            _flatten_leaf, output_tree, is_leaf=lambda l: isinstance(l, npd.Distribution)
+        )
 
         # need to know where the leaves are at to unstack the tree correctly
-        are_leaves = jax.tree_map(lambda _: True, output_tree, is_leaf=lambda l: isinstance(l, npd.Distribution))
+        are_leaves = jax.tree_map(
+            lambda _: True, output_tree, is_leaf=lambda l: isinstance(l, npd.Distribution)
+        )
 
         # TODO possibly insert check whether out_axes is valid and does not go into distribution leaves ??
         return _unstack_flat_leaf_pytrees(are_leaves, flattened_leaves_tree)

@@ -150,7 +150,7 @@ class BayesianNeuralNetworkVI(RegressionModel):
             prior_weight=prior_weight,
             batch_size_vi=self.batch_size_vi,
             log_prob_fn=self.apply_broadcast.log_prob,
-            batch_pred_fn=self.apply.pred,
+            batch_pred_fn=self.apply.pred_mean,
         )
 
         self.elbo = elbo_fn
