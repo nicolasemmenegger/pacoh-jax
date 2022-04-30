@@ -279,7 +279,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
 
         inject_noise_std = self.hyperprior_noise_std
         kl = jnp.nan
-        for _ in range(5):
+        for _ in range(10):
             kl = jax.lax.cond(
                 jnp.isnan(kl),
                 lambda n: compute_kl_with_noise(n),
@@ -287,6 +287,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                 inject_noise_std,
             )
             inject_noise_std *= 2
+            print(inject_noise_std)
 
         return kl
 
@@ -367,7 +368,7 @@ if __name__ == "__main__":
         )
         itrs += 200
 
-        task_xs, task_ys = gp_model.meta_train_tuples_debugging_purposes[0]
+        # task_xs, task_ys = gp_model.meta_train_tuples_debugging_purposes[0]
 
         x_plot = np.linspace(meta_env.domain.l, meta_env.domain.u, num=150)
         x_context, t_context, x_test, y_test = meta_test_data[0]

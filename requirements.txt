@@ -1,5 +1,5 @@
 numpy~=1.22.0
-torch==1.10.2
+torch==1.11.0
 matplotlib~=3.5.1
 jax[cpu]~=0.3.1
 jax[gpu]~=0.3.1
