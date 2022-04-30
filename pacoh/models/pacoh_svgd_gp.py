@@ -236,74 +236,75 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
 
 if __name__ == "__main__":
-    from jax.config import config
-
-    config.update("jax_debug_nans", False)
-    config.update("jax_disable_jit", False)
-
-    from experiments.data_sim import SinusoidDataset
-
-    data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
-    n_tasks = 20
-    meta_train_data = data_sim.generate_meta_train_data(n_tasks=n_tasks, n_samples=10)
-    meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=50)
-
-    NN_LAYERS = (32, 32, 32, 32)
-
-    plot = False
-    from matplotlib import pyplot as plt
-
-    if plot:
-        for x_train, y_train in meta_train_data:
-            plt.scatter(x_train, y_train)
-        plt.title("sample from the GP prior")
-        plt.show()
-    """ 2) Classical mean learning based on mll """
-
-    print("\n ---- GPR mll meta-learning ---- ")
-
-    for weight_decay in [0.5]:
-        pacoh_svgd = PACOH_SVGD_GP(
-            1,
-            1,
-            num_tasks=n_tasks,
-            learning_mode="both",
-            weight_decay=weight_decay,
-            task_batch_size=5,
-            covar_module="NN",
-            mean_module="constant",
-            mean_nn_layers=NN_LAYERS,
-            feature_dim=2,
-            svgd_kernel_bandwidth=1000.0,
-            kernel_nn_layers=NN_LAYERS,
-            num_particles=8,
-            learn_likelihood=True,
-        )
-
-        itrs = 0
-        print("---- weight-decay =  %.4f ----" % weight_decay)
-
-        for i in range(40):
-            n_iter = 500
-            pacoh_svgd.meta_fit(
-                meta_train_data,
-                meta_valid_tuples=meta_test_data,
-                log_period=100,
-                num_iter_fit=n_iter,
-            )
-            itrs += n_iter
-
-            x_plot = np.linspace(-5, 5, num=150)
-            x_context, y_context, x_test, y_test = meta_test_data[0]
-            # do a target fit
-            pacoh_svgd._clear_data()
-            pacoh_svgd.add_data_points(x_context, y_context, refit=True)
-            # do a target predict
-            pred_mean, pred_std = pacoh_svgd.predict(x_plot, return_density=False)
-            plt.scatter(x_test, y_test, color="green")  # the unknown target test points
-            plt.scatter(x_context, y_context, color="red")  # the target train points
-            plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
-            lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
-            plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
-            plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
-            plt.show()
+    pass
+    # from jax.config import config
+    #
+    # config.update("jax_debug_nans", False)
+    # config.update("jax_disable_jit", False)
+    #
+    # from experiments.data_sim import SinusoidDataset
+    #
+    # data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
+    # n_tasks = 20
+    # meta_train_data = data_sim.generate_meta_train_data(n_tasks=n_tasks, n_samples=10)
+    # meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=50)
+    #
+    # NN_LAYERS = (32, 32, 32, 32)
+    #
+    # plot = False
+    # from matplotlib import pyplot as plt
+    #
+    # if plot:
+    #     for x_train, y_train in meta_train_data:
+    #         plt.scatter(x_train, y_train)
+    #     plt.title("sample from the GP prior")
+    #     plt.show()
+    # """ 2) Classical mean learning based on mll """
+    #
+    # print("\n ---- GPR mll meta-learning ---- ")
+    #
+    # for weight_decay in [0.5]:
+    #     pacoh_svgd = PACOH_SVGD_GP(
+    #         1,
+    #         1,
+    #         num_tasks=n_tasks,
+    #         learning_mode="both",
+    #         weight_decay=weight_decay,
+    #         task_batch_size=5,
+    #         covar_module="NN",
+    #         mean_module="constant",
+    #         mean_nn_layers=NN_LAYERS,
+    #         feature_dim=2,
+    #         svgd_kernel_bandwidth=1000.0,
+    #         kernel_nn_layers=NN_LAYERS,
+    #         num_particles=8,
+    #         learn_likelihood=True,
+    #     )
+    #
+    #     itrs = 0
+    #     print("---- weight-decay =  %.4f ----" % weight_decay)
+    #
+    #     for i in range(40):
+    #         n_iter = 500
+    #         pacoh_svgd.meta_fit(
+    #             meta_train_data,
+    #             meta_valid_tuples=meta_test_data,
+    #             log_period=100,
+    #             num_iter_fit=n_iter,
+    #         )
+    #         itrs += n_iter
+    #
+    #         x_plot = np.linspace(-5, 5, num=150)
+    #         x_context, y_context, x_test, y_test = meta_test_data[0]
+    #         # do a target fit
+    #         pacoh_svgd._clear_data()
+    #         pacoh_svgd.add_data_points(x_context, y_context, refit=True)
+    #         # do a target predict
+    #         pred_mean, pred_std = pacoh_svgd.predict(x_plot, return_density=False)
+    #         plt.scatter(x_test, y_test, color="green")  # the unknown target test points
+    #         plt.scatter(x_context, y_context, color="red")  # the target train points
+    #         plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
+    #         lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
+    #         plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
+    #         plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
+    #         plt.show()
