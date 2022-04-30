@@ -1,0 +1,26 @@
+language: python
+
+python:
+  - "3.9"
+
+env:
+  - TENSORFLOW_VERSION=1.5
+  - TENSORFLOW_VERSION=1.6
+  - TENSORFLOW_VERSION=1.7
+
+before_install:
+
+# command to install dependencies
+install:
+  - pip install -r requirements.txt
+
+# command to run tests
+script:
+  - python -m unittest discover
+
+notifications:
+  email:
+    recipients:
+      - nicolas.emmenegger@inf.ethz.ch
+    on_success: always
+    on_failure: always
