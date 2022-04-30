@@ -3,10 +3,8 @@ language: python
 python:
   - "3.9"
 
-env:
-  - TENSORFLOW_VERSION=1.5
-  - TENSORFLOW_VERSION=1.6
-  - TENSORFLOW_VERSION=1.7
+#env:
+#  -
 
 before_install:
 
