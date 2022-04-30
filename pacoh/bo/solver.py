@@ -2,6 +2,7 @@ from abc import abstractmethod
 
 import numpy as np
 import math
+import warnings
 
 
 class Solver:
