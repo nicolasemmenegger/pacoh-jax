@@ -1,6 +1,6 @@
 import functools
 import warnings
-from collections import Callable
+from typing import Callable
 
 import jax
 import numpy as np
