@@ -27,7 +27,7 @@ class TreeTestCase(unittest.TestCase):
         )
 
 
-class SVGDTest(TreeTestCase):
+class TestSVGD(TreeTestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # this is not the most canonical way to initialize a svgd object, but it avoids duplication of code
@@ -43,6 +43,8 @@ class SVGDTest(TreeTestCase):
             learn_likelihood=True,
             n_particles=self.n,
         )
+
+        print(nn)
 
         # construct a svgd object for the nn case
         self.svgd = nn.svgd
@@ -117,7 +119,3 @@ class SVGDTest(TreeTestCase):
                         lambda: 1.0,
                     ),
                 )
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -2,11 +2,11 @@ from numpyro.distributions import Independent, Normal, MultivariateNormal
 from jax import numpy as jnp
 import jax
 
-from pacoh.tests.svgd import TreeTestCase
+from pacoh.tests.test_svgd import TreeTestCase
 from pacoh.util.distributions import vmap_dist
 
 
-class VMAPDistributionTest(TreeTestCase):
+class TestVMAPDistribution(TreeTestCase):
     def get_dist(self, mean):
         return Independent(Normal(mean, jnp.ones_like(mean)), 2)
 

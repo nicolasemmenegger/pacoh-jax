@@ -34,7 +34,7 @@ class TestFunctionalKL(unittest.TestCase):
             kernel_nn_layers=(32, 32),
             hyperprior_lengthscale=self.hyperprior_lengthscale,
             hyperprior_outputscale=self.hyperprior_outputscale,
-            hyperprior_noise_var=self.hyperprior_noise_std,
+            hyperprior_noise_std=self.hyperprior_noise_std,
         )
 
     def test_hyperprior_covariance(self):

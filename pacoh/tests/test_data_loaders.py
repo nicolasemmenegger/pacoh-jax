@@ -5,7 +5,7 @@ from jax import numpy as jnp
 from pacoh.util.data_handling import MetaDataLoaderTwoLevel, MetaDataLoaderOneLevel
 
 
-class DataLoaderTest(unittest.TestCase):
+class TestDataLoader(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ar = jnp.arange

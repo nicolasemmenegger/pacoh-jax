@@ -80,7 +80,7 @@ def construct_bnn_forward_fns(
             res = nn(xs)
             return res
 
-        return pred_dist, NNBaseLearner(log_prob=log_prob, pred_dist=pred_dist, pred=pred)
+        return pred_dist, NNBaseLearner(log_prob=log_prob, pred_dist=pred_dist, pred_mean=pred)
 
     return factory
 

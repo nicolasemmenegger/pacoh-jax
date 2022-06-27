@@ -66,8 +66,6 @@ class SimpleIntegrationTest(unittest.TestCase):
         }
         self._run_meta_module_with_configs(PACOH_MAP_GP, *args, **kwargs)
 
-
-
     def test_pacoh_svgd_gp(self):
         pass
 
