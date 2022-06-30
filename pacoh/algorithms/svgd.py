@@ -75,9 +75,7 @@ class SVGD:
             ) / n_particles
             return -res
 
-        result = jax.tree_multimap(
-            neg_phi_update_leaf, score_val, kernel_grads_val
-        )  # kernel_mat_val is symmetric
+        result = jax.tree_map(neg_phi_update_leaf, score_val, kernel_grads_val)  # kernel_mat_val is symmetric
         return -log_prob, result
 
     def step(self, particles, *data):
@@ -99,9 +97,7 @@ if __name__ == "__main__":
 
     def k_vec_vec(param1, param2):
         # the linear kernel
-        return jnp.exp(
-            pytree_sum(jax.tree_multimap(lambda v1, v2: jnp.sum(-((v1 - v2) ** 2)), param1, param2))
-        )
+        return jnp.exp(pytree_sum(jax.tree_map(lambda v1, v2: jnp.sum(-((v1 - v2) ** 2)), param1, param2)))
 
     print("no vmap", k_vec_vec(p1, p2))
     k_mat_vec = jax.vmap(k_vec_vec, in_axes=(0, None))

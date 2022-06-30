@@ -50,7 +50,7 @@ class JAXRBFKernel(JAXKernel):
 
 def pytree_sq_l2_dist(tree, other):
     func = lambda x1, x2: jnp.sum(jax.lax.square(x1 - x2))
-    return pytree_sum(jax.tree_multimap(func, tree, other))
+    return pytree_sum(jax.tree_map(func, tree, other))
 
 
 # Squared exponential kernel without anything learnable

@@ -28,6 +28,7 @@ class SimpleIntegrationTest(unittest.TestCase):
     This test just runs modules with enought configureations. Together with travis, this will allow us to
     specify maximal ranges for setup.py
     """
+
     def __init__(self, *args, **kwargs):
         super(SimpleIntegrationTest, self).__init__(*args, **kwargs)
         from pacoh.bo.meta_environment import RandomMixtureMetaEnv
@@ -42,27 +43,27 @@ class SimpleIntegrationTest(unittest.TestCase):
         )
 
     def test_pacoh_map_gp(self):
-        args = (1, 1) # input and output dim
+        args = (1, 1)  # input and output dim
         kwargs = {
-            'learning_mode': ParameterChoice("both", "learn_mean", "learn_kernel"),
-            'learn_likelihood': ParameterChoice(True, False),
-            'covar_module': ParameterChoice("SE"),
-            'mean_module': ParameterChoice("constant"),
-            'weight_decay': 0.001,
-            'mean_nn_layers': (32, 32),
-            'kernel_nn_layers': (32, 32),
-            'num_tasks': self.num_train_tasks
+            "learning_mode": ParameterChoice("both", "learn_mean", "learn_kernel"),
+            "learn_likelihood": ParameterChoice(True, False),
+            "covar_module": ParameterChoice("SE"),
+            "mean_module": ParameterChoice("constant"),
+            "weight_decay": 0.001,
+            "mean_nn_layers": (32, 32),
+            "kernel_nn_layers": (32, 32),
+            "num_tasks": self.num_train_tasks,
         }
         self._run_meta_module_with_configs(PACOH_MAP_GP, *args, **kwargs)
         kwargs = {
-            'learning_mode': ParameterChoice("both"),
-            'learn_likelihood': ParameterChoice(True, False),
-            'covar_module': ParameterChoice("NN"),
-            'mean_module': ParameterChoice("NN"),
-            'weight_decay': 0.001,
-            'mean_nn_layers': (32, 32),
-            'kernel_nn_layers': (32, 32),
-            'num_tasks': self.num_train_tasks
+            "learning_mode": ParameterChoice("both"),
+            "learn_likelihood": ParameterChoice(True, False),
+            "covar_module": ParameterChoice("NN"),
+            "mean_module": ParameterChoice("NN"),
+            "weight_decay": 0.001,
+            "mean_nn_layers": (32, 32),
+            "kernel_nn_layers": (32, 32),
+            "num_tasks": self.num_train_tasks,
         }
         self._run_meta_module_with_configs(PACOH_MAP_GP, *args, **kwargs)
 
@@ -87,7 +88,9 @@ class SimpleIntegrationTest(unittest.TestCase):
 
         xs_test = np.linspace(self.meta_env.domain.l, self.meta_env.domain.u, num=150)
         x_context, y_context, x_test, y_test = self.meta_test_data[0]
-        pred_mean, pred_std = meta_regression_module.meta_predict(x_context, y_context, xs_test, return_density=False)
+        pred_mean, pred_std = meta_regression_module.meta_predict(
+            x_context, y_context, xs_test, return_density=False
+        )
         self.assertFalse(np.isnan(np.sum(pred_mean + pred_std)))
         evals = meta_regression_module.meta_eval(x_context, y_context, x_test, y_test)
         for metric in evals.values():
@@ -95,11 +98,11 @@ class SimpleIntegrationTest(unittest.TestCase):
 
 
 def parameter_product(range_dict):
-    """ Takes a dictionary with some keys possibly being ParameterChoice objects. For those, it computes a cartesian product
-    and returns all possible combination of dictionary arising from these Parameter choices. """
+    """Takes a dictionary with some keys possibly being ParameterChoice objects. For those, it computes a cartesian product
+    and returns all possible combination of dictionary arising from these Parameter choices."""
     keys = [k for k, v in range_dict.items() if isinstance(v, ParameterChoice)]
     vals = [v for _, v in range_dict.items() if isinstance(v, ParameterChoice)]
-    items_without_ranges = [(k, v) for k,v in range_dict.items() if not isinstance(v, ParameterChoice)]
+    items_without_ranges = [(k, v) for k, v in range_dict.items() if not isinstance(v, ParameterChoice)]
 
     prod = itertools.product(*vals)
     dicts = []
@@ -108,7 +111,6 @@ def parameter_product(range_dict):
         dicts.append(dict(items))
 
     return dicts
-
 
 
 # if __name__ == "__main__":

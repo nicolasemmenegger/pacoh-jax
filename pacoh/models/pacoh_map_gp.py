@@ -4,7 +4,6 @@ import haiku as hk
 import jax.random
 import numpy as np
 import optax
-import torch
 
 from pacoh.models.meta_regression_base import RegressionModelMetaLearned
 from pacoh.models.pure.pure_functions import construct_gp_base_learner
@@ -174,8 +173,6 @@ if __name__ == "__main__":
     """ 2) Classical mean learning based on mll """
 
     print("\n ---- GPR mll meta-learning ---- ")
-
-    torch.set_num_threads(2)
 
     weight_decay = 0.01
     gp_model = PACOH_MAP_GP(

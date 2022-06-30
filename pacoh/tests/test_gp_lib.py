@@ -88,8 +88,8 @@ class TestAuxiliaryStuff(unittest.TestCase):
         mykl = multivariate_kl(self.fdist1, self.fdist2)
         torchkl = torch.distributions.kl_divergence(self.np1, self.np2)
 
-        self.assertAlmostEquals(diagonalcase, mykl, places=5)
-        self.assertAlmostEquals(torchkl.numpy(), mykl, places=5)
+        self.assertAlmostEqual(diagonalcase, mykl, places=5)
+        self.assertAlmostEqual(torchkl.numpy(), mykl, places=5)
 
     def test_full_covariance(self):
         rng = jax.random.PRNGKey(0)

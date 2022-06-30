@@ -65,7 +65,7 @@ def _auxiliary_to_jax_type(pytree):
 
 
 def _restore_auxiliary(converted, blueprint):
-    return jax.tree_multimap(
+    return jax.tree_map(
         lambda leaf, do_restore: DIST_ID[leaf] if do_restore else leaf,
         converted,
         blueprint,
@@ -91,9 +91,9 @@ def _flatten_leaf(maybe_dist: Union[npd.Distribution, Any]):
 
 
 def _unstack_flat_leaf_pytrees(isleaf, stacked_tree):
-    cls_id_tree = jax.tree_multimap(lambda _, stacked_leaf: stacked_leaf[0], isleaf, stacked_tree)
-    params = jax.tree_multimap(lambda _, stacked_leaf: stacked_leaf[1], isleaf, stacked_tree)
-    translated_aux = jax.tree_multimap(lambda _, stacked_leaf: stacked_leaf[2], isleaf, stacked_tree)
+    cls_id_tree = jax.tree_map(lambda _, stacked_leaf: stacked_leaf[0], isleaf, stacked_tree)
+    params = jax.tree_map(lambda _, stacked_leaf: stacked_leaf[1], isleaf, stacked_tree)
+    translated_aux = jax.tree_map(lambda _, stacked_leaf: stacked_leaf[2], isleaf, stacked_tree)
     return cls_id_tree, params, translated_aux
 
 
@@ -142,7 +142,7 @@ def vmap_dist(f: Callable[[Any], Tree], in_axes=0, out_axes=0, axis_name=None):
         trees = vmapped(*args, **kwargs)
         # the tree of class ids makes sure we stop at the right depth, even though we are not technically at
         # what jax considers a leaf in both the data/param and aux tree
-        unflat = jax.tree_multimap(lambda *leaves: _unflatten_leaf(*leaves), *trees)
+        unflat = jax.tree_map(lambda *leaves: _unflatten_leaf(*leaves), *trees)
         return unflat
 
     return unflattened

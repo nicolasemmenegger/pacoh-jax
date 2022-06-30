@@ -287,7 +287,6 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                 inject_noise_std,
             )
             inject_noise_std *= 2
-            print(inject_noise_std)
 
         return kl
 
@@ -338,7 +337,7 @@ if __name__ == "__main__":
         kernel_nn_layers=NN_LAYERS,
     )
     itrs = 0
-    for i in range(10):
+    for i in range(20):
 
         def mapper(name, _, val, length_scale, output_scale, likelihood_noise):
             if "likelihood" in name:
@@ -378,10 +377,10 @@ if __name__ == "__main__":
         plt.scatter(x_test, y_test)
         plt.scatter(x_context, t_context)
 
-        print("AFTER ITERATION", itrs)
-        print("first dataset", gp_model.meta_eval(x_context, t_context, x_test, y_test))
-        print("all datasets", gp_model.eval_datasets(meta_test_data))
-        print("params", jax.tree_map(jax.nn.softplus, gp_model.particle))
+        # print("AFTER ITERATION", itrs)
+        # print("first dataset", gp_model.meta_eval(x_context, t_context, x_test, y_test))
+        # print("all datasets", gp_model.eval_datasets(meta_test_data))
+        # print("params", jax.tree_map(jax.nn.softplus, gp_model.particle))
 
         plt.plot(x_plot, pred_mean)
         plt.fill_between(x_plot.flatten(), lcb, ucb, alpha=0.2)

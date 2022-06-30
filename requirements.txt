@@ -1,19 +1,10 @@
 numpy~=1.22.0
-torch==1.11.0
+torch~=1.11.0
 matplotlib~=3.5.1
 jax[cpu]~=0.3.1
-jax[gpu]~=0.3.1
-dm-haiku~=0.0.6
+dm-haiku~=0.0.5
 numpyro~=0.9.0
 optax~=0.1.1
 setuptools~=60.9.3
-black~=22.1.0
-pandas~=1.4.1
-
-# tensorflow
-# tensorflow_probability==0.14
-# scipy~=1.7.1
-# gpytorch==1.0.1
-# absl-py
-# pyro-ppl
-# future
+pytest~=7.1.2
+black~=22.3.0

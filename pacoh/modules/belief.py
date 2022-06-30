@@ -101,7 +101,7 @@ class GaussianBelief:
             sample = sample.squeeze(axis=-1)
             return sample
 
-        return jax.tree_multimap(sample_leaf, parameters.mean, parameters.log_std, keys_tree)
+        return jax.tree_map(sample_leaf, parameters.mean, parameters.log_std, keys_tree)
 
     @staticmethod
     def rsample_multiple(parameters: Tree, key: jax.random.PRNGKey, num_samples: int):
@@ -112,7 +112,7 @@ class GaussianBelief:
             parameters, lambda p: isinstance(p, GaussianBeliefState)
         )
         keys_tree = jax.tree_util.tree_unflatten(treedef, jax.random.split(key, len(flattened)))
-        return jax.tree_multimap(
+        return jax.tree_map(
             jax.tree_util.Partial(GaussianBelief.rsample, num_samples=num_samples),
             parameters,
             keys_tree,
@@ -135,6 +135,6 @@ class GaussianBelief:
                 res, axis=tuple(range(1, res.ndim))
             )  # this sums up along the sample size direction
 
-        sum = pytree_sum(jax.tree_multimap(leaf_log_prob, parameters.mean, parameters.std, samples))
+        sum = pytree_sum(jax.tree_map(leaf_log_prob, parameters.mean, parameters.std, samples))
 
         return sum

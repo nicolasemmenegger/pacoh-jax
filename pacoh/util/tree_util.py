@@ -8,7 +8,7 @@ from pacoh.util.typing_util import Tree
 
 
 def pytrees_stack(pytrees: Collection[Tree], axis=0):
-    results = jax.tree_multimap(lambda *values: jnp.stack(values, axis=axis), *pytrees)
+    results = jax.tree_map(lambda *values: jnp.stack(values, axis=axis), *pytrees)
     return results
 
 

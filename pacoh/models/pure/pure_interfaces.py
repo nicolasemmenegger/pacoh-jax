@@ -7,6 +7,7 @@ class NNBaseLearner(NamedTuple):
     This is because we fit by doing gradient-based optimization outside of the impure hk.Modules, and hence only need access to a forward function
     pred_mean and pred_dist for BNNs.
     """
+
     pred_dist: Callable
     pred_mean: Callable
     log_prob: Callable
@@ -23,6 +24,7 @@ class GPBaseLearner(NamedTuple):
     base_learner_predict: Actual predict on a task
     base_learner_mll_estimator: The mll of the modules estimator under the data one just passed it
     """
+
     base_learner_fit: Callable
     base_learner_predict: Callable
     base_learner_mll_estimator: Callable

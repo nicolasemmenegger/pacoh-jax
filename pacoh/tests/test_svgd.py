@@ -16,12 +16,12 @@ from pacoh.util.typing_util import Tree
 class TreeTestCase(unittest.TestCase):
     @staticmethod
     def tree_assert_equal(first: Tree, second: Tree) -> None:
-        jax.tree_multimap(lambda p, other: np.testing.assert_equal(p, other), first, second)
+        jax.tree_map(lambda p, other: np.testing.assert_equal(p, other), first, second)
 
     @staticmethod
     def tree_assert_all_close(first: Tree, second: Tree) -> None:
-        jax.tree_multimap(
-            lambda p, other: np.testing.assert_allclose(p, other, rtol=1e-3),
+        jax.tree_map(
+            lambda p, other: np.testing.assert_allclose(p, other, rtol=2e-3),
             first,
             second,
         )
@@ -90,11 +90,11 @@ class TestSVGD(TreeTestCase):
                 kernel_val = K[kp, k]
                 first_term = jax.tree_map(lambda p: p * kernel_val, scores[kp])
                 second_term = kernel_grad_fns[k](unstacked_particles[kp])
-                together = jax.tree_multimap(lambda p, o: -1.0 / self.n * (p + o), first_term, second_term)
+                together = jax.tree_map(lambda p, o: -1.0 / self.n * (p + o), first_term, second_term)
                 if update_k is None:
                     update_k = together
                 else:
-                    update_k = jax.tree_multimap(lambda a, b: a + b, update_k, together)
+                    update_k = jax.tree_map(lambda a, b: a + b, update_k, together)
 
             updates.append(update_k)
 
