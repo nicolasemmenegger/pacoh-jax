@@ -125,7 +125,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood=True,
-            initial_noise_std=jax.nn.softplus(0.0) + 0.001,
+            likelihood_prior_mean=jax.nn.softplus(0.0) + 0.001,
             kernel_length_scale=jax.nn.softplus(0.0),
             kernel_output_scale=jax.nn.softplus(0.0),
         )

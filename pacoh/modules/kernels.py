@@ -23,25 +23,28 @@ class JAXRBFKernel(JAXKernel):
         input_dim,
         length_scale=1.0,
         output_scale=1.0,
-        log_ls_variance=0.0,  # 0.0 corresponds to deterministic initialization of the lengthscale
-        log_os_variance=0.0,  # 0.0 corresponds to deterministic initialization of the outputscale
+        log_ls_std=0.0,  # 0.0 corresponds to deterministic initialization of the lengthscale
+        log_os_std=0.0,  # 0.0 corresponds to deterministic initialization of the outputscale
         length_scale_constraint_gt=0.0,
         output_scale_constraint_gt=0.0,
+        learnable=True,
     ):
         super().__init__()
         self.input_dim = input_dim
 
         self.output_scale = PositiveParameter(
             mean=output_scale,
-            log_variance=log_os_variance,
+            log_stddev=log_os_std,
             boundary_value=output_scale_constraint_gt,
             name="OutputScale",
+            learnable=learnable,
         )
         self.length_scale = PositiveParameter(
             mean=length_scale,
-            log_variance=log_ls_variance,
+            log_stddev=log_ls_std,
             boundary_value=length_scale_constraint_gt,
             name="LengthScale",
+            learnable=learnable,
         )
 
     def __call__(self, x1, x2):
@@ -88,13 +91,13 @@ class JAXRBFKernelNN(JAXKernel):
 
         self.output_scale = PositiveParameter(
             mean=output_scale,
-            log_variance=0.0,
+            log_stddev=0.0,
             boundary_value=output_scale_constraint_gt,
             name="OutputScale",
         )
         self.length_scale = PositiveParameter(
             mean=length_scale,
-            log_variance=0.0,
+            log_stddev=0.0,
             boundary_value=length_scale_constraint_gt,
             name="LengthScale",
         )

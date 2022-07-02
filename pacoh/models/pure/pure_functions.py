@@ -95,9 +95,12 @@ def construct_gp_base_learner(
     mean_nn_layers,
     kernel_nn_layers,
     learn_likelihood=True,
-    initial_noise_std=1.0,
+    likelihood_prior_mean=1.0,
+    likelihood_prior_std=0.0,
     kernel_length_scale=1.0,
     kernel_output_scale=1.0,
+    kernel_prior_std=0.0,
+    mean_module_prior_std=0.0,
 ):
     def factory():
         """The arguments here are what _setup_gp_prior had."""
@@ -115,8 +118,14 @@ def construct_gp_base_learner(
                 output_scale=kernel_output_scale,
             )
         elif covar_option == "SE":
+            learn_kernel = learning_mode in ["learn_kernel", "both"]
             covar_module = JAXRBFKernel(
-                input_dim, length_scale=kernel_length_scale, output_scale=kernel_output_scale
+                input_dim,
+                length_scale=kernel_length_scale,
+                output_scale=kernel_output_scale,
+                learnable=learn_kernel,
+                log_ls_std=kernel_prior_std,
+                log_os_std=kernel_prior_std,
             )
         elif callable(covar_option):
             covar_module = covar_option()
@@ -132,7 +141,10 @@ def construct_gp_base_learner(
             ], "neural network parameters must be learned"
             mean_module = hk.nets.MLP(output_sizes=mean_nn_layers + (output_dim,), activation=jax.nn.tanh)
         elif mean_option == "constant":
-            mean_module = JAXConstantMean(output_dim=output_dim)
+            learn_mean = learning_mode in ["learn_mean", "both"]
+            mean_module = JAXConstantMean(
+                output_dim=output_dim, learnable=learn_mean, initialization_std=mean_module_prior_std
+            )
         elif mean_option == "zero":
             mean_module = JAXZeroMean(output_dim=output_dim)
         elif callable(mean_option):
@@ -143,9 +155,10 @@ def construct_gp_base_learner(
 
         likelihood = JAXGaussianLikelihood(
             output_dim=output_dim,
-            variance=initial_noise_std * initial_noise_std,
+            variance=likelihood_prior_mean * likelihood_prior_mean,
+            log_var_std=likelihood_prior_std,
             learn_likelihood=learn_likelihood,
-            variance_constraint_gt=1e-3,
+            variance_constraint_gt=1e-8,
         )
 
         base_learner = JAXExactGP(mean_module, covar_module, likelihood)

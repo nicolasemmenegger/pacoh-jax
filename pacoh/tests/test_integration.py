@@ -3,7 +3,9 @@ import unittest
 
 import numpy as np
 
+from pacoh.models.f_pacoh_map import F_PACOH_MAP_GP
 from pacoh.models.pacoh_map_gp import PACOH_MAP_GP
+from pacoh.models.pacoh_svgd_gp import PACOH_SVGD_GP
 
 
 class ParameterChoice:
@@ -25,7 +27,7 @@ class ParameterChoice:
 
 class SimpleIntegrationTest(unittest.TestCase):
     """
-    This test just runs modules with enought configureations. Together with travis, this will allow us to
+    This test just runs modules with enough configurations. Together with travis, this will allow us to
     specify maximal ranges for setup.py
     """
 
@@ -68,10 +70,36 @@ class SimpleIntegrationTest(unittest.TestCase):
         self._run_meta_module_with_configs(PACOH_MAP_GP, *args, **kwargs)
 
     def test_pacoh_svgd_gp(self):
-        pass
+        args = (1, 1)  # input and output dim
+        kwargs = {
+            "learning_mode": ParameterChoice("learn_mean", "both", "learn_kernel"),  # both, learn_kernel
+            "learn_likelihood": ParameterChoice(True, False),  # True,
+            "covar_module": ParameterChoice("SE"),
+            "mean_module": ParameterChoice("constant"),
+            "weight_decay": 0.001,
+            "mean_nn_layers": (32, 32),
+            "kernel_nn_layers": (32, 32),
+            "num_tasks": self.num_train_tasks,
+            "num_particles": 5,
+        }
+        from jax import config
+
+        config.update("jax_disable_jit", True)
+        self._run_meta_module_with_configs(PACOH_SVGD_GP, *args, **kwargs)
 
     def test_fpacoh_map_gp(self):
-        pass
+        args = (1, 1)  # input and output dim
+        kwargs = {
+            "domain": self.meta_env.domain,
+            "learning_mode": ParameterChoice("both", "learn_mean", "learn_kernel"),
+            "covar_module": ParameterChoice("SE"),
+            "mean_module": ParameterChoice("constant"),
+            "weight_decay": 0.001,
+            "mean_nn_layers": (32, 32),
+            "kernel_nn_layers": (32, 32),
+            "num_tasks": self.num_train_tasks,
+        }
+        self._run_meta_module_with_configs(F_PACOH_MAP_GP, *args, **kwargs)
 
     def test_vanilla_gp(self):
         pass
@@ -95,6 +123,12 @@ class SimpleIntegrationTest(unittest.TestCase):
         evals = meta_regression_module.meta_eval(x_context, y_context, x_test, y_test)
         for metric in evals.values():
             self.assertFalse(np.isnan(metric))
+
+    def _run_module_with_config(self, mod_init, *args, **kwargs):
+        pass
+
+    def _run_module_with_configs(self, mod_init, *args, **kwargs):
+        pass
 
 
 def parameter_product(range_dict):

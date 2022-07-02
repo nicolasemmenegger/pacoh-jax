@@ -14,21 +14,33 @@ class PositiveParameter(hk.Module):
     with gpytorch.
     """
 
-    def __init__(self, mean=None, log_variance=0.0, boundary_value=0.0, shape=None, name="PositiveParameter"):
+    def __init__(
+        self,
+        mean=None,
+        log_stddev=0.0,
+        boundary_value=0.0,
+        shape=None,
+        name="PositiveParameter",
+        learnable=True,
+    ):
         """
         :param mean: A float specifying the mean of the module
-        :param log_variance: A float specifying the variance in log_scale with which we initialize
+        :param log_stddev: A float specifying the variance in log_scale with which we initialize
             if 0.0, will be deterministically initialized
         :param boundary_value:
         :param shape
         :param name: name of the module
         """
         super().__init__(name=name)
+        self.learnable = learnable
+        if not learnable:
+            self.mean = jax.nn.softplus(0.0)  # to be consistent with the logscale defaults
         if mean is None:
             self.log_scale_mean = 0
         else:
             self.log_scale_mean = _softplus_inverse(mean - boundary_value)
-        self.log_scale_var = log_variance
+
+        self.log_scale_std = log_stddev
         self.boundary_value = boundary_value
         if shape is not None:
             self.shape = shape
@@ -39,10 +51,15 @@ class PositiveParameter(hk.Module):
             self.shape = mean.shape
 
     def __call__(self):
-        if self.log_scale_var == 0.0:
+        if not self.learnable:
+            return self.mean
+
+        if self.log_scale_std == 0.0:
             initializer = hk.initializers.Constant(self.log_scale_mean)
         else:
-            initializer = hk.initializers.RandomNormal(self.log_scale_mean, self.log_scale_var)
+            import numpyro
+
+            initializer = hk.initializers.RandomNormal(self.log_scale_std, self.log_scale_mean)
         exponentiated = jax.nn.softplus(
             hk.get_parameter("__positive_log_scale_param", shape=self.shape, init=initializer)
         )

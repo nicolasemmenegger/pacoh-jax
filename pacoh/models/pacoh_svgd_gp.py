@@ -37,16 +37,6 @@ construct_meta_gp_forward_fns = multi_transform_and_batch_module_with_state(
     },
 )
 
-# def foo(mod_name: str, name: str, value):
-#     if mod_name == "jax_gaussian_likelihood/~/PositiveParameter":
-#         return value * 0.0 + -2.0
-#     elif mod_name == "jaxrbf_kernel/~/LengthScale":
-#         return value * 0.0 - 1.1
-#     elif mod_name == "jaxrbf_kernel/~/OutputScale":
-#         return value * 0.0 + 0.5
-#     else:
-#         assert False, "boum"
-
 
 class PACOH_SVGD_GP(RegressionModelMetaLearned):
     def __init__(
@@ -66,11 +56,10 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         weight_prior_std=0.5,
         bias_prior_std: float = 3.0,
         likelihood_prior_mean: float = 0.01,
-        likelihood_prior_std: float = 0.1,
+        likelihood_prior_std: float = 0.01,
         kernel_prior_mean: float = 1.0,
-        kernel_prior_std: float = 1.0,
-        mean_module_prior_mean: float = 1.0,
-        mean_module_prior_std: float = 1.0,
+        kernel_prior_std: float = 0.1,
+        mean_module_prior_std: float = 0.1,
         learn_likelihood: bool = True,
         # inference algorithm specification
         svgd_kernel: str = "RBF",
@@ -116,7 +105,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             covar_module, JAXKernel
         ), "Invalid covar_module option"
         assert optimizer in ["AdamW", "Adam", "SGD"], "Invalid optimizer option"
-        assert learning_mode in ["mean", "kernel", "both"], "Invalid learning mode"
+        assert learning_mode in ["learn_mean", "learn_kernel", "both"], "Invalid learning mode"
 
         # a) useful attributes
         self._num_particles = num_particles
@@ -132,7 +121,9 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood,
-            initial_noise_std=likelihood_prior_mean,
+            likelihood_prior_mean=likelihood_prior_mean,
+            likelihood_prior_std=likelihood_prior_std,
+            mean_module_prior_std=mean_module_prior_std,
         )
 
         # c) initialize the the state of the hyperprior and of the (hyper posterior) particles
@@ -159,15 +150,12 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                 # lengthscale and outputscale
                 return transform(kernel_prior_mean, name), kernel_prior_std
             elif MEAN_MODULE_NAME in mod_name:
-                return mean_module_prior_mean, mean_module_prior_std
+                return 0.0, mean_module_prior_std
             else:
                 raise AssertionError("Unknown hk.Module: can only handle mlp and likelihood")
 
         self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
         self._rng, particle_sample_key = jax.random.split(self._rng)
-
-        """ UNCOMMENT this if you want some random initialisation according to the hyperprior """
-        # self.particles = GaussianBelief.rsample(self.hyperprior, particle_sample_key, num_particles)
 
         # d) setup kernel forward function and the base learner partition function
         if svgd_kernel != "RBF":  # elif kernel == 'IMQ':

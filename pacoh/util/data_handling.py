@@ -161,7 +161,7 @@ def normalize_predict(predict_fn):
         if is_gaussian_dist(pred_dist):
             transformed = normalize_gaussian_dist(pred_dist, normalizer=self._normalizer)
         elif isinstance(pred_dist, MixtureSameFamily):
-            assert is_gaussian_dist(pred_dist.component_distribution), "mixture compoenents must be gaussians"
+            assert is_gaussian_dist(pred_dist.component_distribution), "mixture components must be gaussians"
             transformed_components = normalize_gaussian_dist(
                 pred_dist.component_distribution, normalizer=self._normalizer
             )
@@ -182,12 +182,16 @@ def normalize_predict(predict_fn):
             return_full_covariance = False
 
         # handle full_covariance_stuff
-        if isinstance(pred_dist, MultivariateNormal):
+        can_have_full_covariance = isinstance(pred_dist, MultivariateNormal) or (
+            isinstance(pred_dist, MixtureSameFamily)
+            and isinstance(pred_dist.component_distribution, MultivariateNormal)
+        )
+        if can_have_full_covariance:
             if return_full_covariance:
                 return transformed
             else:
                 transformed = diagonalize_gaussian(transformed)
-        elif return_full_covariance and not isinstance(pred_dist, MultivariateNormal):
+        elif return_full_covariance and not can_have_full_covariance:
             raise ValueError(
                 "Cannot return full covariance if the base learner does not return full covariance. Please debug"
             )
