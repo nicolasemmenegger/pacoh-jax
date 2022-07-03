@@ -72,19 +72,16 @@ class SimpleIntegrationTest(unittest.TestCase):
     def test_pacoh_svgd_gp(self):
         args = (1, 1)  # input and output dim
         kwargs = {
-            "learning_mode": ParameterChoice("learn_mean", "both", "learn_kernel"),  # both, learn_kernel
-            "learn_likelihood": ParameterChoice(True, False),  # True,
+            "learning_mode": ParameterChoice("learn_mean", "both", "learn_kernel"),
+            "learn_likelihood": ParameterChoice(True, False),
             "covar_module": ParameterChoice("SE"),
             "mean_module": ParameterChoice("constant"),
-            "weight_decay": 0.001,
+            "prior_weight": 0.001,
             "mean_nn_layers": (32, 32),
             "kernel_nn_layers": (32, 32),
             "num_tasks": self.num_train_tasks,
-            "num_particles": 5,
+            "num_particles": 10,
         }
-        from jax import config
-
-        config.update("jax_disable_jit", True)
         self._run_meta_module_with_configs(PACOH_SVGD_GP, *args, **kwargs)
 
     def test_fpacoh_map_gp(self):

@@ -20,7 +20,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         output_dim: int,
         learning_mode: str = "both",
         learn_likelihood: bool = True,
-        weight_decay: float = 0.0,
+        weight_decay: float = 0.1,
         covar_module: Union[str, Callable[[], JAXKernel]] = "NN",
         mean_module: Union[str, Callable[[], JAXMean]] = "NN",
         mean_nn_layers: Collection[int] = (32, 32),
@@ -56,6 +56,10 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
             training data
         :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
+
+        Note: unlike in PACOH_SVGD_GP, we use the same gaussian hyperprior for all learnable parameters for simplicity
+        (implicitly with weight decay). If you wish to use separate hyperpriors for the mean, kernel, and nn modules
+        (used in mean and kernel of course), please use the SVGD class with 1 particle
         """
         super().__init__(
             input_dim,
@@ -91,7 +95,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
             mean_nn_layers,
             kernel_nn_layers,
             learn_likelihood,
-            likelihood_prior_mean=jax.nn.softplus(0.0) + 1e-3,
+            likelihood_prior_mean=jax.nn.softplus(0.0),
             kernel_length_scale=jax.nn.softplus(0.0),
             kernel_output_scale=jax.nn.softplus(0.0),
         )
@@ -174,17 +178,20 @@ if __name__ == "__main__":
 
     print("\n ---- GPR mll meta-learning ---- ")
 
-    weight_decay = 0.01
+    # weight_decay = 0.01
+    weight_decay = 0.0
     gp_model = PACOH_MAP_GP(
         input_dim=meta_env.domain.d,
         output_dim=1,
         num_tasks=num_train_tasks,
         weight_decay=weight_decay,
         task_batch_size=1,
-        covar_module="NN",
-        mean_module="NN",
+        covar_module="SE",
+        mean_module="constant",
+        learning_mode="both",
         mean_nn_layers=NN_LAYERS,
         kernel_nn_layers=NN_LAYERS,
+        learn_likelihood=True,
     )
     itrs = 0
     print("---- weight-decay =  %.4f ----" % weight_decay)
@@ -193,7 +200,6 @@ if __name__ == "__main__":
             meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=500
         )
         itrs += 500
-
         x_plot = np.linspace(meta_env.domain.l, meta_env.domain.u, num=150)
         x_context, t_context, x_test, y_test = meta_test_data[0]
         pred_mean, pred_std = gp_model.meta_predict(x_context, t_context, x_plot, return_density=False)

@@ -53,22 +53,21 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         mean_nn_layers: Collection[int] = (32, 32),
         kernel_nn_layers: Collection[int] = (32, 32),
         # hyperprior detailed specification
-        weight_prior_std=0.5,
-        bias_prior_std: float = 3.0,
-        likelihood_prior_mean: float = 0.01,
-        likelihood_prior_std: float = 0.01,
-        kernel_prior_mean: float = 1.0,
-        kernel_prior_std: float = 0.1,
-        mean_module_prior_std: float = 0.1,
+        weight_prior_std=0.5,  # this is not used for initialisation, only for hyperprior eval
+        bias_prior_std: float = 3.0,  # this is not used for initialisation, only for hyperprior eval
+        likelihood_prior_mean: float = jax.nn.softplus(0.0),  # initial likelihood std mean
+        likelihood_prior_std: float = 0.5,  # likelihood parameters hyperprior std
+        kernel_prior_mean: float = jax.nn.softplus(0.0),  # initial kernel parameter mean
+        kernel_prior_std: float = 0.5,  # initial kernel parameter std
+        mean_module_prior_std: float = 3.0,  # initial mean module (if it is not "NN"), paramter std
         learn_likelihood: bool = True,
         # inference algorithm specification
         svgd_kernel: str = "RBF",
-        svgd_kernel_bandwidth=100.0,
-        optimizer="AdamW",
+        svgd_kernel_bandwidth=0.5,
+        optimizer="Adam",
         lr: float = 1e-3,
         lr_decay: float = 1.0,
-        weight_decay: float = 0.0,
-        prior_weight: float = 1e-4,
+        prior_weight: float = 1e-3,
         num_particles=10,
         # train loop specification
         num_iter_meta_fit: int = 10000,
@@ -134,11 +133,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         self._single_empty_state = pytree_unstack(self._empty_states)
 
         def mean_std_map(mod_name: str, name: str, _: jnp.array):
-            # for each module and parameter, we can specify custom mean and std for the hyperprior
-            transform = lambda value, name: np.log(value) if POSITIVE_PARAMETER_NAME in name else value
-            # transform positive parameters to log_scale for storage
             if LIKELIHOOD_MODULE_NAME in mod_name:
-                return transform(likelihood_prior_mean, name), likelihood_prior_std
+                return likelihood_prior_mean, likelihood_prior_std
             elif MLP_MODULE_NAME in mod_name:
                 if name == "w":
                     return 0.0, weight_prior_std
@@ -148,12 +144,13 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
                     raise AssertionError("Unknown MLP parameter name")
             elif KERNEL_MODULE_NAME in mod_name:
                 # lengthscale and outputscale
-                return transform(kernel_prior_mean, name), kernel_prior_std
+                return kernel_prior_mean, kernel_prior_std
             elif MEAN_MODULE_NAME in mod_name:
                 return 0.0, mean_module_prior_std
             else:
                 raise AssertionError("Unknown hk.Module: can only handle mlp and likelihood")
 
+        # initialize the hyperprior
         self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
         self._rng, particle_sample_key = jax.random.split(self._rng)
 
@@ -168,8 +165,8 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         def target_post_prob_batched(hyper_posterior_particles, rngs, *data, mll_many_many):
             # mll_many_many is expected to produce a matrix (i,j) |-> ln(Z(S_j,P_i)) where
             meta_xs, meta_ys = data
-            # this will have size K x task_batch
-            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, None, meta_xs, meta_ys)[
+            # this will have size K x task_batch, and we take the [0] element because it also returns a state
+            mll_matrix = mll_many_many(hyper_posterior_particles, self._empty_states, rngs, meta_xs, meta_ys)[
                 0
             ]
             batch_data_likelihood_per_particle = jnp.sum(mll_matrix, axis=0) * num_tasks / task_batch_size
@@ -178,13 +175,14 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
         # f) setup optimizer
         self.optimizer, self.optimizer_state = initialize_optimizer(
-            optimizer, lr, self.particles, lr_decay=lr_decay, weight_decay=weight_decay
+            optimizer, lr, self.particles, lr_decay=lr_decay
         )
 
         # g) thread together svgd
         mll_many_many = jax.jit(
             vmap_dist(self._apply.base_learner_mll_estimator, (None, None, None, 0, 0), 0)
         )
+        self.mll_many_many = mll_many_many
         self.svgd = SVGD(
             functools.partial(target_post_prob_batched, mll_many_many=mll_many_many),
             jax.jit(get_pytree_rbf_fn(svgd_kernel_bandwidth, 1.0)),
@@ -209,6 +207,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
     def _meta_step(self, minibatch):
         xs_tasks, ys_tasks = minibatch
         neg_log_prob, self.particles = self.svgd.step(self.particles, xs_tasks, ys_tasks)
+        # mll_matrix, _ = self.mll_many_many(self.particles, self._empty_states, None, xs_tasks, ys_tasks)
         return neg_log_prob
 
     def _recompute_posterior(self):
@@ -224,75 +223,66 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
 
 
 if __name__ == "__main__":
-    pass
-    # from jax.config import config
-    #
-    # config.update("jax_debug_nans", False)
-    # config.update("jax_disable_jit", False)
-    #
-    # from experiments.data_sim import SinusoidDataset
-    #
-    # data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
-    # n_tasks = 20
-    # meta_train_data = data_sim.generate_meta_train_data(n_tasks=n_tasks, n_samples=10)
-    # meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=50)
-    #
-    # NN_LAYERS = (32, 32, 32, 32)
-    #
-    # plot = False
-    # from matplotlib import pyplot as plt
-    #
-    # if plot:
-    #     for x_train, y_train in meta_train_data:
-    #         plt.scatter(x_train, y_train)
-    #     plt.title("sample from the GP prior")
-    #     plt.show()
-    # """ 2) Classical mean learning based on mll """
-    #
-    # print("\n ---- GPR mll meta-learning ---- ")
-    #
-    # for weight_decay in [0.5]:
-    #     pacoh_svgd = PACOH_SVGD_GP(
-    #         1,
-    #         1,
-    #         num_tasks=n_tasks,
-    #         learning_mode="both",
-    #         weight_decay=weight_decay,
-    #         task_batch_size=5,
-    #         covar_module="NN",
-    #         mean_module="constant",
-    #         mean_nn_layers=NN_LAYERS,
-    #         feature_dim=2,
-    #         svgd_kernel_bandwidth=1000.0,
-    #         kernel_nn_layers=NN_LAYERS,
-    #         num_particles=8,
-    #         learn_likelihood=True,
-    #     )
-    #
-    #     itrs = 0
-    #     print("---- weight-decay =  %.4f ----" % weight_decay)
-    #
-    #     for i in range(40):
-    #         n_iter = 500
-    #         pacoh_svgd.meta_fit(
-    #             meta_train_data,
-    #             meta_valid_tuples=meta_test_data,
-    #             log_period=100,
-    #             num_iter_fit=n_iter,
-    #         )
-    #         itrs += n_iter
-    #
-    #         x_plot = np.linspace(-5, 5, num=150)
-    #         x_context, y_context, x_test, y_test = meta_test_data[0]
-    #         # do a target fit
-    #         pacoh_svgd._clear_data()
-    #         pacoh_svgd.add_data_points(x_context, y_context, refit=True)
-    #         # do a target predict
-    #         pred_mean, pred_std = pacoh_svgd.predict(x_plot, return_density=False)
-    #         plt.scatter(x_test, y_test, color="green")  # the unknown target test points
-    #         plt.scatter(x_context, y_context, color="red")  # the target train points
-    #         plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
-    #         lcb, ucb = pacoh_svgd.confidence_intervals(x_plot)
-    #         plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
-    #         plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
-    #         plt.show()
+    from pacoh.bo.meta_environment import RandomMixtureMetaEnv
+
+    num_train_tasks = 20
+    meta_env = RandomMixtureMetaEnv(random_state=np.random.RandomState(29))
+    meta_train_data = meta_env.generate_uniform_meta_train_data(
+        num_tasks=num_train_tasks, num_points_per_task=10
+    )
+    meta_test_data = meta_env.generate_uniform_meta_valid_data(
+        num_tasks=50, num_points_context=10, num_points_test=160
+    )
+
+    NN_LAYERS = (32, 32)
+    plot = True
+    from matplotlib import pyplot as plt
+
+    if plot:
+        for x_train, y_train in meta_train_data:
+            plt.scatter(x_train, y_train)
+        plt.title("sample from the GP prior")
+        plt.show()
+
+    """ 2) Classical mean learning based on mll """
+
+    print("\n ---- GPR mll meta-learning ---- ")
+
+    gp_model = PACOH_SVGD_GP(
+        input_dim=meta_env.domain.d,
+        output_dim=1,
+        num_tasks=num_train_tasks,
+        task_batch_size=1,
+        covar_module="NN",
+        mean_module="NN",
+        learning_mode="both",
+        mean_nn_layers=NN_LAYERS,
+        kernel_nn_layers=NN_LAYERS,
+        num_particles=10,
+        learn_likelihood=True,
+    )
+    itrs = 0
+    for i in range(10):
+        gp_model.meta_fit(
+            meta_train_data, meta_valid_tuples=meta_test_data, log_period=1000, num_iter_fit=500
+        )
+        itrs += 500
+
+        x_plot = np.linspace(meta_env.domain.l, meta_env.domain.u, num=150)
+        x_context, t_context, x_test, y_test = meta_test_data[0]
+        pred_mean, pred_std = gp_model.meta_predict(x_context, t_context, x_plot, return_density=False)
+        ucb, lcb = (pred_mean + 2 * pred_std).flatten(), (pred_mean - 2 * pred_std).flatten()
+
+        plt.scatter(x_test, y_test)
+        plt.scatter(x_context, t_context)
+
+        plt.plot(x_plot, pred_mean)
+        plt.fill_between(x_plot.flatten(), lcb, ucb, alpha=0.2, color="orange")
+        plt.title("GPR SVGD meta mll itrs = %i" % itrs)
+        plt.show()
+
+        print("AFTER ITERATION", itrs)
+        print("first ds", gp_model.meta_eval(x_context, t_context, x_test, y_test))
+        print("eval all datasets", gp_model.eval_datasets(meta_test_data))
+
+    # print(gp_model.particles)
