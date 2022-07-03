@@ -9,7 +9,7 @@ from pacoh.util.data_handling import DataNormalizer, normalize_predict
 from pacoh.util.initialization import initialize_model
 
 
-class GPRegressionVanilla(RegressionModel):
+class Vanilla_GP(RegressionModel):
     def __init__(
         self,
         input_dim: int,
@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
     # normalizer = DataNormalizer.from_dataset(x_data_test, y_data_test, normalize_data=True)
 
-    gp = GPRegressionVanilla(input_dim=x_data.shape[-1], normalizer=None, normalize_data=True)
+    gp = Vanilla_GP(input_dim=x_data.shape[-1], normalizer=None, normalize_data=True)
     gp.add_data_points(x_data_train, y_data_train)
 
     x_plot = np.linspace(6, -6, num=n_test_samples)

@@ -21,7 +21,7 @@ class TreeTestCase(unittest.TestCase):
     @staticmethod
     def tree_assert_all_close(first: Tree, second: Tree) -> None:
         jax.tree_map(
-            lambda p, other: np.testing.assert_allclose(p, other, rtol=2e-3),
+            lambda p, other: np.testing.assert_allclose(p, other, rtol=1e-2),
             first,
             second,
         )

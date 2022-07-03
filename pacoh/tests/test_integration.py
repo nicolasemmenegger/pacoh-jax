@@ -3,6 +3,7 @@ import unittest
 
 import numpy as np
 
+from pacoh.models import Vanilla_GP
 from pacoh.models.f_pacoh_map import F_PACOH_MAP_GP
 from pacoh.models.pacoh_map_gp import PACOH_MAP_GP
 from pacoh.models.pacoh_svgd_gp import PACOH_SVGD_GP
@@ -99,7 +100,16 @@ class SimpleIntegrationTest(unittest.TestCase):
         self._run_meta_module_with_configs(F_PACOH_MAP_GP, *args, **kwargs)
 
     def test_vanilla_gp(self):
-        pass
+        gp = Vanilla_GP(input_dim=1, normalizer=None, normalize_data=True)
+        xs, ys = self.meta_train_data[0]
+        gp.add_data_points(xs, ys)
+
+        xs_test, ys_test = self.meta_train_data[1]
+        pred_mean, pred_std = gp.predict(xs_test, return_density=False)
+        self.assertFalse(np.isnan(np.sum(pred_mean + pred_std)))
+        evals = gp.eval(xs_test, ys_test)
+        for metric in evals.values():
+            self.assertFalse(np.isnan(metric))
 
     def _run_meta_module_with_configs(self, mod_init, *args, **keyword_args):
         for config in parameter_product(keyword_args):
