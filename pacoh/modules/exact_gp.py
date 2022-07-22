@@ -25,8 +25,8 @@ class JAXExactGP:
         self.likelihood = likelihood
 
         self.cov_vec_vec = cov_module
-        self.cov_vec_set = hk.vmap(cov_module.__call__, (None, 0))
-        self.cov_set_set = hk.vmap(self.cov_vec_set.__call__, (0, None))
+        self.cov_vec_set = hk.vmap(cov_module.__call__, (None, 0), split_rng=False)
+        self.cov_set_set = hk.vmap(self.cov_vec_set.__call__, (0, None), split_rng=False)
 
     def init_fn(self, dummy_xs):
         """Haiku initialiser"""
