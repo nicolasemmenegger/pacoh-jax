@@ -106,10 +106,7 @@ class PACOH_MAP_GP(RegressionModelMetaLearned):
         )
         self.state = self.empty_state = empty_state
 
-        # self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, self.particle)
-
         self._rng, sample_key = jax.random.split(self._rng)
-        # self.particle = pytree_unstack(GaussianBelief.rsample(self.hyperprior, sample_key, 1))[0]
 
         def target_post_prob(particle, meta_xs_batch, meta_ys_batch):
             """Assumes meta_xs is a list of len = task_batch_size, with each element being an array of a variable
@@ -216,69 +213,3 @@ if __name__ == "__main__":
         print("AFTER ITERATION", itrs)
         print("first ds", gp_model.meta_eval(x_context, t_context, x_test, y_test))
         print("eval all datasets", gp_model.eval_datasets(meta_test_data))
-
-    # from jax.config import config
-    #
-    # config.update("jax_debug_nans", False)
-    # config.update("jax_disable_jit", False)
-    #
-    # from experiments.data_sim import SinusoidDataset
-    #
-    # data_sim = SinusoidDataset(random_state=np.random.RandomState(29))
-    # num_train_tasks = 20
-    # meta_train_data = data_sim.generate_meta_train_data(n_tasks=num_train_tasks, n_samples=10)
-    # meta_test_data = data_sim.generate_meta_test_data(n_tasks=50, n_samples_context=10, n_samples_test=160)
-    #
-    # NN_LAYERS = (32, 32, 32, 32)
-    #
-    # plot = False
-    # from matplotlib import pyplot as plt
-    #
-    # if plot:
-    #     for x_train, y_train in meta_train_data:
-    #         plt.scatter(x_train, y_train)
-    #     plt.title("sample from the GP prior")
-    #     plt.show()
-    # """ 2) Classical mean learning based on mll """
-    #
-    # print("\n ---- GPR mll meta-learning ---- ")
-    #
-    # torch.set_num_threads(2)
-    #
-    # for weight_decay in [0.5]:
-    #     pacoh_map = PACOH_MAP_GP(
-    #         1,
-    #         1,
-    #         learning_mode="both",
-    #         weight_decay=weight_decay,
-    #         task_batch_size=5,
-    #         num_tasks=num_train_tasks,
-    #         covar_module="NN",
-    #         mean_module="NN",
-    #         mean_nn_layers=NN_LAYERS,
-    #         feature_dim=2,
-    #         kernel_nn_layers=NN_LAYERS,
-    #     )
-    #
-    #     itrs = 0
-    #     print("---- weight-decay =  %.4f ----" % weight_decay)
-    #
-    #     for i in range(40):
-    #         n_iter = 50
-    #         pacoh_map.meta_fit(meta_train_data, meta_test_data, log_period=1000, num_iter_fit=n_iter)
-    #
-    #         itrs += n_iter
-    #
-    #         x_plot = np.linspace(-5, 5, num=150)
-    #         x_context, y_context, x_test, y_test = meta_test_data[0]
-    #         pred_dist = pacoh_map.meta_predict(x_context, y_context, x_plot, return_density=True)
-    #         pred_mean = pred_dist.mean
-    #
-    #         plt.scatter(x_test, y_test, color="green")  # the unknown target test points
-    #         plt.scatter(x_context, y_context, color="red")  # the target train points
-    #         plt.plot(x_plot, pred_mean)  # the curve we fitted based on the target test points
-    #
-    #         lcb, ucb = pacoh_map.confidence_intervals(x_plot)
-    #         plt.fill_between(x_plot, lcb.flatten(), ucb.flatten(), alpha=0.2, color="green")
-    #         plt.title("GPR meta mll (weight-decay =  %.4f) itrs = %i" % (weight_decay, itrs))
-    #         plt.show()

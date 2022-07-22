@@ -70,8 +70,7 @@ class Vanilla_GP(RegressionModel):
         computes the predictive distribution of the targets p(t|test_x, train_x, train_y)
 
 
-        Args:
-            test_x: (ndarray) query input data of shape (n_samples, ndim_x)
+        :param test_x: (ndarray) query input data of shape (n_samples, ndim_x)
         Notes:
             The decorator takes care of the mapping into and from the normalized space and adds return_density argument
         """

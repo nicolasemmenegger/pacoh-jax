@@ -27,9 +27,11 @@ class PositiveParameter(hk.Module):
         :param mean: A float specifying the mean of the module
         :param log_stddev: A float specifying the variance in log_scale with which we initialize
             if 0.0, will be deterministically initialized
-        :param boundary_value:
-        :param shape
-        :param name: name of the module
+        :param boundary_value: 
+        :param shape: The shape of the parameter. If None, will infer it from the provided (or default) mean 
+        :param name: name of the module, if customization is necessary
+        :param learnable: whether this is an actual learnable parameter. If not, the module will have the same functionality,
+        but it's gradients will all be 0.
         """
         super().__init__(name=name)
         self.learnable = learnable

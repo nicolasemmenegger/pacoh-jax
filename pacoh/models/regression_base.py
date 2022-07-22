@@ -94,10 +94,9 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
     def add_data_point(self, x, y, refit: bool = True):
         """
         Method to add a single data point, e.g. in a Bayesion Optimization (BO) setting
-        Args:
-            x: feature of shape
-            y: float or of shape (1) or of shape (1,1)
-            refit: whether to refit the posterior or not
+        :param x: feature of shape
+        :param y: float or of shape (1) or of shape (1,1)
+        :param refit: whether to refit the posterior or not
         """
         xs, ys = np.expand_dims(x, axis=0), np.expand_dims(y, axis=0)
         xs, ys = handle_batch_input_dimensionality(xs, ys)
@@ -107,12 +106,12 @@ class RegressionModel(metaclass=AbstractAttributesABCMeta):
         """
         Computes the average test log likelihood and the rmse on test data
 
-        Args:
-            test_xs: (ndarray) test input data of shape (n_samples, ndim_x)
-            test_ys: (ndarray) test target data of shape (n_samples, 1)
-            pred_dist: numpyro.Distribution
+        
+        :param test_xs: (ndarray) test input data of shape (n_samples, ndim_x)
+        :param test_ys: (ndarray) test target data of shape (n_samples, 1)
+        :param pred_dist: numpyro.Distribution
 
-        Returns: a dictionary with keys 'avg. ll' 'rmse' 'calib err.' & 'calib err. chi2'
+        :returns a dictionary with keys 'avg. ll' 'rmse' 'calib err.' & 'calib err. chi2'
 
         """
         test_xs, test_ys = handle_batch_input_dimensionality(test_xs, test_ys, flatten_ys=self.flatten_ys)

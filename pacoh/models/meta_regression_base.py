@@ -21,10 +21,6 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
     Abstracts the boilerplate functionality of a MetaLearnedRegression Model. This includes data normalization,
     fitting and inference. It also includes meta-functionality, in particular meta_fitting to multiple tasks,
     and meta_prediction on a new task.
-
-    """
-
-    """
     
     Public Methods:
         predict: predicts with a fitted base learner
@@ -150,10 +146,8 @@ class RegressionModelMetaLearned(RegressionModel, metaclass=AbstractAttributesAB
         Performs meta-testing on multiple tasks / datasets.
         Computes the average test log likelihood, the rmse and the calibration error over multiple test datasets
 
-        Args:
-            test_tuples: list of test set tuples, i.e. [(test_context_x_1, test_context_y_1, test_x_1, test_y_1), ...]
-
-        Returns: (avg_log_likelihood, rmse, calibr_error)
+        :param test_tuples: list of test set tuples, i.e. [(test_context_x_1, test_context_y_1, test_x_1, test_y_1), ...]
+        :returns (avg_log_likelihood, rmse, calibr_error)
 
         """
         assert all([len(valid_tuple) == 4 for valid_tuple in test_tuples])

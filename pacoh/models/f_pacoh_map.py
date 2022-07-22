@@ -61,12 +61,11 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
          :param weight_decay: Weight decay on the parameters. Corresponds to setting a (certain)
              gaussian hyperprior on the parameters of the mean, kernel. We do not apply weight_decay
              on the likelihood parameters, since this coresponds to letting the noise go to softplus(0.0) = 0.69
-        :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
+         :param feature_dim: The output dimension of the NN feature map if this option is chosen, otherwise ignored
+         :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
          :param mean_module: Can be "NN", "constant", "zero", or a Mean object
          :param mean_nn_layers: Size specifications of the hidden (!) layers used in the mean feature maps
          :param kernel_nn_layers: Size specifications of the hidden (!) layers used in the kernel feature maps
-         :param feature_dim: In case covar_module is NN, feature_dim denotes the dimensionality of the output
-             of the MLP that is then fed through a RBF kernel
          :param task_batch_size: The number of tasks in a batch
          :param num_tasks: The number of tasks we intend to train on. Required for jax.jit reasons
          :param lr: The learning rate of the AdamW optimizer

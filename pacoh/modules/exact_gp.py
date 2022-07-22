@@ -16,11 +16,6 @@ class JAXExactGP:
 
     def __init__(self, mean_module, cov_module, likelihood):
         """
-        Args:
-            mean_module: hk.Module
-            cov_module: hk.Module
-            likelihood: hk.Module
-
         :param mean_module: Should have a call function with signature (*, input_dim) -> (*, output_dim) where *
             may be empty
         :param cov_module: Should implement a function (input_dim,) x (input_dim,) -> float

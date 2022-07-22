@@ -382,12 +382,9 @@ def handle_batch_input_dimensionality(
 ):
     """
     Takes a dataset S=(xs,ys) and returns it in desired shape whenever possible. Returned values are as follows:
-    xs shall have shape (num_points, input_dim) and
-    ys shall have size (num_points,) or (num_points, 1)
-    Args:
-        xs: The inputs
-        ys: The labels (optional)
-        flatten_ys: Whether to return ys as (num_points), or (num_points, 1)
+    :param xs: The inputs. xs shall have shape (num_points, input_dim) 
+    :param ys: The labels (optional). ys shall have size (num_points,) or (num_points, 1)
+    :param flatten_ys: Whether to return ys as (num_points), or (num_points, 1)
     Notes:
         ys can be None, to easily handle test data.
     """

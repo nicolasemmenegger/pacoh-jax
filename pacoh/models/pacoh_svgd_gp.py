@@ -80,8 +80,45 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
         random_state: jax.random.PRNGKey = None,
     ):
         """
-        The std parameters of the likelihood and kernel module are actually in logscale (anything that represents a
-        positive parameter)
+        :param input_dim: The dimensionality of input points
+        :param output_dim: The dimensionality of output points. Only output_dim = 1 is currently supported
+        :param feature_dim: In case covar_module is NN, feature_dim denotes the dimensionality of the output
+            of the MLP that is then fed through a RBF kernel
+        :param num_tasks: The number of tasks we intend to train on. Required for jax.jit reasons
+
+        :param covar_module: Can be "NN", "SE" (Squared Exponential, i.e. RBF) or a Kernel object
+        :param mean_module: Can be "NN", "constant", "zero", or a Mean
+        :param learning_mode: Can be one of "learn_mean", "learn_kernel", "both", or "vanilla_gp"
+        :param mean_nn_layers: Size specifications of the hidden (!) layers used in the mean feature maps
+        :param kernel_nn_layers: Size specifications of the hidden (!) layers used in the kernel feature maps
+
+        :param weight_prior_std: the prior std of the nn weights
+        :param bias_prior_std: the prior std of the nn biases
+        :param likelihood_prior_mean: the prior mean of the likelihood logscale std
+        :param likelihood_prior_std: the prior std of the likelihood logscale std
+        :param kernel_prior_mean: the prior mean of the kernel logscale params
+        :param kernel_prior_std: the prior std of the kernel logscale params
+        :param mean_module_prior_std: the prior std of the mean module parameters (if mean_module is constant and not NN or zero-mean) 
+        :param learn_likelihood: Whether to learn the (homoscedastic) variance of the noise
+        
+        :param svgd_kernel: only RBF supported for now
+        :param svgd_kernel_bandwidth: the bandwidth of the RBF kernel for SVGD
+        :param optimizer: the optimizer to use. Adam as default. 
+               Note that we explicitly regularize according to the hyperprior, unlike in PACOH_MAP_GP, where we use the same weight decay in AdamW for all parameters
+        :param lr: The learning rate of the AdamW optimizer
+        :param lr_decay: The learning rate decay. 1.0 means no decay
+        :param prior_weight How much to weight the hyperprior against the log likelihood (i.e. the meta-regularization parameter)
+        :param num_particles: How many particles to use in SVGD
+
+        :param num_iter_meta_fit: How many iterations to meta-fit by default
+        :param task_batch_size: If not -1, how many tasks to use in a batch
+        :param minibatch_at_dataset_level: whether to use minibatches within the tasks too.
+        :param dataset_batch_size: if enabled, how many points to use within a btach   
+
+        :param normalize_data: Whether to do everything with normalized data
+        :param normalizer: Optional normalizer object. If none supplied, normalization stats are inferred from the
+            training data
+        :param random_state: A jax.random.PRNGKey to control all the pseudo-randomness inside this module
         """
         super().__init__(
             input_dim,
@@ -150,7 +187,7 @@ class PACOH_SVGD_GP(RegressionModelMetaLearned):
             else:
                 raise AssertionError("Unknown hk.Module: can only handle mlp and likelihood")
 
-        # initialize the hyperprior
+        # initialize the hyperprior (note that this is *not* sampling from the hyperprior)
         self.hyperprior = GaussianBeliefState.initialize_heterogenous(mean_std_map, template)
         self._rng, particle_sample_key = jax.random.split(self._rng)
 

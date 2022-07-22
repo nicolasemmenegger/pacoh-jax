@@ -21,14 +21,26 @@ class JAXRBFKernel(JAXKernel):
     def __init__(
         self,
         input_dim,
-        length_scale=1.0,
-        output_scale=1.0,
+        length_scale=jax.nn.softplus(0.0),
+        output_scale=jax.nn.softplus(0.0),
         log_ls_std=0.0,  # 0.0 corresponds to deterministic initialization of the lengthscale
         log_os_std=0.0,  # 0.0 corresponds to deterministic initialization of the outputscale
         length_scale_constraint_gt=0.0,
         output_scale_constraint_gt=0.0,
         learnable=True,
     ):
+        """
+        :param input_dim: the input dimension of the covariates
+        :param length_scale: kernel lengthscale
+        :param output_scale: kernel outputscale.
+        :param log_ls_std: the initialization std of the length_scale parameter. We store parameters in log scale
+        and a log_ls_std value of 0.0 corresponds to deterministic initalization
+        :param log_os_std: same but for output_scale
+        :param length_scale_constraint_gt: a boundary value that lower bounds the length_scale value (in actual scale, not
+        logscale)
+        :param output_scale_constraint_gt: same but for output scale
+        :param learnable: whether the kernel parameters are differentiated w.r.t.
+        """
         super().__init__()
         self.input_dim = input_dim
 
@@ -83,7 +95,17 @@ class JAXRBFKernelNN(JAXKernel):
         length_scale_constraint_gt=0.0,
         output_scale_constraint_gt=0.0,
     ):
-
+        """
+        :param input_dim: the input dimension of the covariates
+        :param feature_dim: output of the nn model before going through rbf function
+        :param layer_sizes: sizes of the nn hidden layers
+        :param length_scale: kernel lengthscale
+        :param output_scale: kernel outputscale.
+        :param length_scale_constraint_gt: a boundary value that lower bounds the length_scale value (in actual scale, not
+        logscale)
+        :param output_scale_constraint_gt: same but for output scale
+        :param learnable: whether the kernel parameters are differentiated w.r.t.
+        """
         super().__init__()
 
         self.input_dim = input_dim
