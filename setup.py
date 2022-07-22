@@ -26,7 +26,7 @@ setuptools.setup(
         'optax>=0.1.0',  # optimization, lower versions don't seem to have the exact same interface
         'matplotlib>=2.0.0',  # plotting
     ],
-    extra_requires={
+    extras_require={
         'gpu': 'jax[cuda11_cudnn82]>=0.3.0'
     }
 )
