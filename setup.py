@@ -26,10 +26,4 @@ setuptools.setup(
         'optax>=0.1.0',  # optimization, lower versions don't seem to have the exact same interface
         'matplotlib>=2.0.0',  # plotting
     ],
-    extras_require={
-        'gpu': [
-            'jax[cuda]>=0.3.0 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html',
-        ]
-
-    }
 )
