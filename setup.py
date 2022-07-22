@@ -27,6 +27,9 @@ setuptools.setup(
         'matplotlib>=2.0.0',  # plotting
     ],
     extras_require={
-        'gpu': 'jax[cuda11_cudnn82]>=0.3.0'
+        'gpu': [
+            'jax[cuda]>=0.3.0 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html',
+        ]
+
     }
 )
