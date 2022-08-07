@@ -206,8 +206,8 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
     def _meta_step(self, mini_batch) -> float:
         xs_batch, ys_batch = mini_batch
         self._rng, key = jax.random.split(self._rng)
-        loss = jnp.nan
         factor = 1.0
+        loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch, factor)
         while jnp.isnan(loss) or self._contains_nan(grad):
             # error loop bumping up the noise std in the f_kl computation in case of numerical instabilities
             loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch, factor)
