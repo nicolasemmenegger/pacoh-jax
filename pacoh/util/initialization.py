@@ -19,7 +19,7 @@ def _call_init(
     """
     dummy_data = []
     for shape in shapes:
-        dummy_data.append(jnp.ones(shape))
+        dummy_data.append(jnp.ones(shape, dtype=jnp.float64))
     return init(prng_key, *dummy_data)
 
 
@@ -37,7 +37,7 @@ def _call_init_batched(
     """
     dummy_data = []
     for shape in shapes:
-        dummy_data.append(jnp.ones(shape))
+        dummy_data.append(jnp.ones(shape, jnp.float64))
 
     prng_keys = jax.random.split(prng_key, n_models)
     return init(prng_keys, *dummy_data)

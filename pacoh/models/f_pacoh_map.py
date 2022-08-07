@@ -22,6 +22,7 @@ from pacoh.util.initialization import (
     initialize_optimizer,
     initialize_model,
 )
+from pacoh.util.tree_util import pytree_sum
 
 
 class F_PACOH_MAP_GP(RegressionModelMetaLearned):
@@ -155,9 +156,9 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         self.hyperprior_noise_std = hyperprior_noise_std
         self._rng, sample_key = jax.random.split(self._rng)
 
-        def target_post_prob_one_task(particle, key, xs, ys):
+        def target_post_prob_one_task(particle, key, xs, ys, noise_factor):
             mll, _ = self._apply_fns.base_learner_mll_estimator(particle, empty_state, None, xs, ys)
-            kl = self._functional_kl(particle, key, xs)
+            kl = self._functional_kl(particle, key, xs, noise_factor)
 
             # this is formula (3) from pacoh, and prior_factor corresponds to kappa
             n = num_tasks
@@ -168,20 +169,20 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
                 + prior_factor * (1 / jnp.sqrt(n) + 1 / (n * m)) * kl / task_batch_size
             )
 
-        def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
+        def target_post_prob_loop(particle, key_for_sampling, meta_xs_batch, meta_ys_batch, noise_factor):
             # meta_xs_batch is a python list of jnp.arrays
             loss = 0.0
             keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
             for xs, ys, key in zip(meta_xs_batch, meta_ys_batch, keys):
-                loss += target_post_prob_one_task(particle, key, xs, ys)
+                loss += target_post_prob_one_task(particle, key, xs, ys, noise_factor)
             return loss
 
-        target_post_prob_vmap_array = jax.vmap(target_post_prob_one_task, in_axes=(None, 0, 0, 0))
+        target_post_prob_vmap_array = jax.vmap(target_post_prob_one_task, in_axes=(None, 0, 0, 0, None))
 
-        def target_post_prob_vmap(particle, key_for_sampling, meta_xs_batch, meta_ys_batch):
+        def target_post_prob_vmap(particle, key_for_sampling, meta_xs_batch, meta_ys_batch, noise_factor):
             # meta_xs_batch is a jnp.array
             keys = jax.random.split(key_for_sampling, len(meta_xs_batch))
-            return jnp.sum(target_post_prob_vmap_array(particle, keys, meta_xs_batch, meta_ys_batch))
+            return jnp.sum(target_post_prob_vmap_array(particle, keys, meta_xs_batch, meta_ys_batch, noise_factor))
 
         if minibatch_at_dataset_level:
             self.target_val_and_grad = jax.jit(jax.value_and_grad(jax.jit(target_post_prob_vmap)))
@@ -198,10 +199,19 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             "AdamW", lr, self.particle, lr_decay, weight_decay=weight_decay
         )
 
+    def _contains_nan(self, gradient):
+        component_sums = jax.tree_map(jnp.sum, gradient)
+        return jnp.any(jnp.isnan(pytree_sum(component_sums)))
+
     def _meta_step(self, mini_batch) -> float:
         xs_batch, ys_batch = mini_batch
         self._rng, key = jax.random.split(self._rng)
-        loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch)
+        loss = jnp.nan
+        factor = 1.0
+        while jnp.isnan(loss) or self._contains_nan(grad):
+            # error loop bumping up the noise std in the f_kl computation in case of numerical instabilities
+            loss, grad = self.target_val_and_grad(self.particle, key, xs_batch, ys_batch, factor)
+            factor *= 4
         updates, self.optimizer_state = self.optimizer.update(grad, self.optimizer_state, self.particle)
         self.particle = optax.apply_updates(self.particle, updates)
         return loss
@@ -242,7 +252,7 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
         assert xs_kl.shape == (self.num_samples_kl, self.input_dim)
         return xs_kl
 
-    def _functional_kl(self, particle, k, xs):
+    def _functional_kl(self, particle, k, xs, noise_factor):
         """
         Computes the approximation of the functional kl divergence by subsampling
         :param particle: The parameters of the hyperposterior/prior
@@ -271,22 +281,8 @@ class F_PACOH_MAP_GP(RegressionModelMetaLearned):
             kl = multivariate_kl(hyperposterior, hyperprior_with_noise)
             return kl
 
-        # WARNING: this is causing some problems with jit, even though it should not:
-        # https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#control-flow
-        # the for loop is diffable and jittable, since the condition is not dependent on the data
-        # the jax.lax.cond should make sure that the loop body is differentiable and jittable too (?)
-
-        inject_noise_std = self.hyperprior_noise_std
-        kl = jnp.nan
-        for _ in range(10):
-            kl = jax.lax.cond(
-                jnp.isnan(kl),
-                lambda n: compute_kl_with_noise(n),
-                lambda _: kl,
-                inject_noise_std,
-            )
-            inject_noise_std *= 2
-
+        inject_noise_std = self.hyperprior_noise_std * noise_factor
+        kl = compute_kl_with_noise(inject_noise_std)
         return kl
 
     def _clear_data(self):

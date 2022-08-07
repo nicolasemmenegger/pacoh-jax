@@ -63,6 +63,6 @@ class PositiveParameter(hk.Module):
 
             initializer = hk.initializers.RandomNormal(self.log_scale_std, self.log_scale_mean)
         exponentiated = jax.nn.softplus(
-            hk.get_parameter("__positive_log_scale_param", shape=self.shape, init=initializer)
+            hk.get_parameter("__positive_log_scale_param", shape=self.shape, init=initializer, dtype=jnp.float64)
         )
         return exponentiated + self.boundary_value

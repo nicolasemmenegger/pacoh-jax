@@ -103,7 +103,7 @@ class DataNormalizer:
                 ys_normalized = (ys - self.y_mean[0]) / self.y_std[0]
             else:
                 ys_normalized = (ys - self.y_mean) / self.y_std
-            return xs_normalized, ys_normalized
+            return jnp.float64(xs_normalized), jnp.float64(ys_normalized) # TODO convert here
 
     def handle_data(self, xs, ys=None):
         if ys is not None:

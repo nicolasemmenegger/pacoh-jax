@@ -35,12 +35,14 @@ class JAXConstantMean(JAXMean):
                 "mu",
                 shape=[self.output_dim],
                 init=hk.initializers.Constant(self.init_constant),
+                dtype=jnp.float64
             )
         else:
             mean = hk.get_parameter(
                 "mu",
                 shape=[self.output_dim],
                 init=hk.initializers.RandomNormal(self.initialization_std, self.init_constant),
+                dtype=jnp.float64
             )
         return jnp.ones(xs.shape[:-1] + (self.output_dim,)) * mean
 
